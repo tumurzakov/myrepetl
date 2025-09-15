@@ -1,0 +1,224 @@
+name: demo_etl_pipeline
+sources:
+- auto_position: true
+  charset: utf8mb4
+  database: demo_source_db
+  host: localhost
+  name: demo_source
+  password: replication_password
+  port: 3306
+  server_id: 100
+  tables:
+  - users
+  - orders
+  - products
+  user: replication_user
+target_tables:
+- charset: utf8mb4
+  database: demo_target_db
+  engine: InnoDB
+  fields:
+  - auto_increment: true
+    default_value: null
+    field_type: integer
+    length: null
+    name: id
+    nullable: false
+    primary_key: true
+  - auto_increment: false
+    default_value: null
+    field_type: varchar
+    length: 255
+    name: name
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: varchar
+    length: 255
+    name: email
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: varchar
+    length: 50
+    name: status
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: datetime
+    length: null
+    name: created_at
+    nullable: true
+    primary_key: false
+  indexes: []
+  name: users
+- charset: utf8mb4
+  database: demo_target_db
+  engine: InnoDB
+  fields:
+  - auto_increment: true
+    default_value: null
+    field_type: integer
+    length: null
+    name: id
+    nullable: false
+    primary_key: true
+  - auto_increment: false
+    default_value: null
+    field_type: integer
+    length: null
+    name: user_id
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: integer
+    length: null
+    name: product_id
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: decimal
+    length: 10,2
+    name: amount
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: datetime
+    length: null
+    name: order_date
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: varchar
+    length: 50
+    name: status
+    nullable: true
+    primary_key: false
+  indexes: []
+  name: orders
+- charset: utf8mb4
+  database: demo_target_db
+  engine: InnoDB
+  fields:
+  - auto_increment: true
+    default_value: null
+    field_type: integer
+    length: null
+    name: id
+    nullable: false
+    primary_key: true
+  - auto_increment: false
+    default_value: null
+    field_type: varchar
+    length: 255
+    name: name
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: text
+    length: null
+    name: description
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: decimal
+    length: 10,2
+    name: price
+    nullable: true
+    primary_key: false
+  - auto_increment: false
+    default_value: null
+    field_type: varchar
+    length: 100
+    name: category
+    nullable: true
+    primary_key: false
+  indexes: []
+  name: products
+transformation_rules:
+- field_mappings:
+  - source_field: id
+    target_field: id
+    transformation: null
+  - source_field: name
+    target_field: name
+    transformation: uppercase_transform
+  - source_field: email
+    target_field: email
+    transformation: lowercase_transform
+  - source_field: status
+    target_field: status
+    transformation: null
+  - source_field: created_at
+    target_field: created_at
+    transformation: null
+  filters:
+  - '{status} != ''deleted'''
+  name: users_transform
+  operations:
+  - insert
+  - update
+  - delete
+  source_table: users
+  target_table: users
+- field_mappings:
+  - source_field: id
+    target_field: id
+    transformation: null
+  - source_field: user_id
+    target_field: user_id
+    transformation: null
+  - source_field: product_id
+    target_field: product_id
+    transformation: null
+  - source_field: amount
+    target_field: amount
+    transformation: null
+  - source_field: order_date
+    target_field: order_date
+    transformation: null
+  - source_field: status
+    target_field: status
+    transformation: uppercase_transform
+  filters:
+  - '{amount} > 0'
+  name: orders_transform
+  operations:
+  - insert
+  - update
+  - delete
+  source_table: orders
+  target_table: orders
+- field_mappings:
+  - source_field: id
+    target_field: id
+    transformation: null
+  - source_field: name
+    target_field: name
+    transformation: uppercase_transform
+  - source_field: description
+    target_field: description
+    transformation: null
+  - source_field: price
+    target_field: price
+    transformation: null
+  - source_field: category
+    target_field: category
+    transformation: uppercase_transform
+  filters: []
+  name: products_transform
+  operations:
+  - insert
+  - update
+  - delete
+  source_table: products
+  target_table: products

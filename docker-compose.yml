@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # Source MySQL database
+  mysql-source:
+    image: mysql:5.7
+    container_name: etl-mysql-source
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: source_db
+      MYSQL_USER: source_user
+      MYSQL_PASSWORD: source_password
+    volumes:
+      - mysql_source_data:/var/lib/mysql
+      - ./kube/source_init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+    ports:
+      - "3306:3306"
+    networks:
+      - etl-network
+
+  # Target MySQL database
+  mysql-target:
+    image: mysql:5.7
+    container_name: etl-mysql-target
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: target_db
+      MYSQL_USER: target_user
+      MYSQL_PASSWORD: target_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_target_data:/var/lib/mysql
+      - ./kube/target_init.sql:/docker-entrypoint-initdb.d/target_init.sql
+    networks:
+      - etl-network
+
+  # ETL Tool
+  etl-tool:
+    build: .
+    container_name: etl-tool
+    depends_on:
+      - mysql-source
+      - mysql-target
+    volumes:
+      - ./:/app
+    environment:
+      - ETL_CONFIG_DIR=/app/configs
+      - ETL_LOG_DIR=/app/logs
+      - ETL_BACKUP_DIR=/app/backups
+    networks:
+      - etl-network
+    command: >
+      python cli.py run demo_pipeline.json
+      --target-host mysql-target
+      --target-port 3306
+      --target-user target_user
+      --target-password target_password
+      --target-database target_db
+      --monitor
+      --monitor-interval 30
+    restart: unless-stopped
+
+  # MySQL Admin (phpMyAdmin)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: etl-phpmyadmin
+    depends_on:
+      - mysql-source
+      - mysql-target
+    environment:
+      PMA_HOSTS: mysql-source,mysql-target
+      PMA_PORTS: 3306,3306
+      PMA_USER: root
+      PMA_PASSWORD: rootpassword
+    ports:
+      - "8080:80"
+    networks:
+      - etl-network
+
+volumes:
+  mysql_source_data:
+  mysql_target_data:
+
+networks:
+  etl-network:
+    driver: bridge
