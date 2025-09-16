@@ -168,7 +168,7 @@ class TestFullPipeline:
             service.config.parse_target_table.return_value = ("target1", "users")
             
             # Load transform module
-            service.transform_service.load_transform_module()
+            service.transform_service.load_transform_module("src.transform")
             
             # Create test event
             event = InsertEvent(
@@ -303,7 +303,7 @@ class TestFullPipeline:
     def test_transform_functions_integration(self):
         """Test transform functions with real data"""
         service = ETLService()
-        service.transform_service.load_transform_module()
+        service.transform_service.load_transform_module("src.transform")
         
         # Test uppercase transform
         result = service.transform_service.apply_column_transforms(

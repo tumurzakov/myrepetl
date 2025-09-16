@@ -60,7 +60,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "myrepetl=myrepetl.cli:main",
+            "myrepetl=src.cli:main",
         ],
     },
     include_package_data=True,

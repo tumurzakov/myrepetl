@@ -663,13 +663,13 @@ myrepetl/
 │   ├── models/            # Модели данных
 │   ├── services/          # Бизнес-логика
 │   ├── utils/             # Утилиты
+│   ├── cli.py             # CLI интерфейс
+│   ├── etl_service.py     # Основной ETL сервис
 │   ├── exceptions.py      # Исключения
-│   └── etl_service.py     # Основной сервис
+│   └── transform.py       # Функции трансформации
 ├── tests/                 # Тесты
 │   ├── unit/              # Unit тесты
 │   └── integration/       # Интеграционные тесты
-├── cli.py                 # CLI интерфейс
-├── transform.py           # Функции трансформации
 ├── configs/               # Конфигурационные файлы
 ├── kube/                  # Kubernetes манифесты
 ├── docker-compose.yml     # Docker Compose конфигурация

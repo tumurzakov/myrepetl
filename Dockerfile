@@ -36,8 +36,8 @@ USER etluser
 EXPOSE 8080
 
 # Default command
-CMD ["python", "cli.py", "--help"]
+CMD ["python", "src/cli.py", "--help"]
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import cli; print('ETL tool is healthy')" || exit 1
+    CMD python -c "from src.cli import main; print('ETL tool is healthy')" || exit 1

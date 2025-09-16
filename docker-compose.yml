@@ -83,7 +83,7 @@ services:
     networks:
       - etl-network
     command: >
-      python cli.py run configs/demo_pipeline.json
+      python src/cli.py run configs/demo_pipeline.json
       --monitor
       --monitor-interval 30
       --log-level DEBUG

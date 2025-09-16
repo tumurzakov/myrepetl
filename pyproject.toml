@@ -58,11 +58,11 @@ Documentation = "https://github.com/tumurzakov/myrepetl#readme"
 "Bug Tracker" = "https://github.com/tumurzakov/myrepetl/issues"
 
 [project.scripts]
-myrepetl = "myrepetl.cli:main"
+myrepetl = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["myrepetl*"]
+include = ["src*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.json", "*.sql", "*.yaml", "*.yml"]
