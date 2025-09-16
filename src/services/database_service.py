@@ -130,19 +130,37 @@ class DatabaseService:
     def close_connection(self, connection_name: str = "default") -> None:
         """Close database connection"""
         if connection_name in self._connections:
+            connection = self._connections[connection_name]
             try:
-                self._connections[connection_name].close()
+                # Принудительно закрываем соединение
+                if hasattr(connection, 'close'):
+                    connection.close()
+                # Дополнительно пытаемся откатить транзакции
+                if hasattr(connection, 'rollback'):
+                    try:
+                        connection.rollback()
+                    except Exception:
+                        pass
             except Exception:
                 pass
             finally:
-                del self._connections[connection_name]
+                # Удаляем из словарей
+                if connection_name in self._connections:
+                    del self._connections[connection_name]
                 if connection_name in self._connection_configs:
                     del self._connection_configs[connection_name]
     
     def close_all_connections(self) -> None:
         """Close all database connections"""
-        for connection_name in list(self._connections.keys()):
-            self.close_connection(connection_name)
+        connection_names = list(self._connections.keys())
+        for connection_name in connection_names:
+            try:
+                self.close_connection(connection_name)
+            except Exception as e:
+                # Логируем ошибку, но продолжаем закрывать остальные соединения
+                import structlog
+                logger = structlog.get_logger()
+                logger.error("Error closing connection", connection_name=connection_name, error=str(e))
     
     def __del__(self):
         """Cleanup on destruction"""

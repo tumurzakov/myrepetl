@@ -8,6 +8,7 @@ and processes them according to configuration.
 
 import argparse
 import logging
+import signal
 import sys
 from typing import Optional
 
@@ -22,6 +23,22 @@ class MySQLReplicationCLI:
     def __init__(self):
         self.logger = get_logger()
         self.etl_service = ETLService()
+        self._shutdown_requested = False
+        self._setup_signal_handlers()
+    
+    def _setup_signal_handlers(self) -> None:
+        """Настройка обработчиков сигналов для корректного завершения"""
+        def signal_handler(signum, frame):
+            signal_name = signal.Signals(signum).name
+            self.logger.info(f"Received signal {signal_name}, initiating graceful shutdown...")
+            self._shutdown_requested = True
+            # Передаем сигнал остановки в ETL сервис
+            if hasattr(self.etl_service, 'request_shutdown'):
+                self.etl_service.request_shutdown()
+        
+        # Обработка SIGINT (Ctrl+C) и SIGTERM
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
     
     def run_replication(self, config_path: str, **kwargs) -> None:
         """Запуск репликации"""
@@ -32,12 +49,18 @@ class MySQLReplicationCLI:
             # Запускаем репликацию
             self.etl_service.run_replication()
             
+        except KeyboardInterrupt:
+            self.logger.info("Replication interrupted by user")
+            raise
         except ETLException as e:
             self.logger.error("ETL error", error=str(e))
             raise
         except Exception as e:
             self.logger.error("Unexpected error", error=str(e))
             raise
+        finally:
+            # Принудительная очистка ресурсов
+            self._force_cleanup()
     
     def test_connection(self, config_path: str) -> None:
         """Тестирование подключения"""
@@ -58,6 +81,15 @@ class MySQLReplicationCLI:
         except Exception as e:
             self.logger.error("Unexpected error", error=str(e))
             raise
+    
+    def _force_cleanup(self) -> None:
+        """Принудительная очистка всех ресурсов"""
+        try:
+            if hasattr(self.etl_service, 'cleanup'):
+                self.etl_service.cleanup()
+            self.logger.info("Force cleanup completed")
+        except Exception as e:
+            self.logger.error("Error during force cleanup", error=str(e))
 
 
 def main():
@@ -100,6 +132,9 @@ def main():
             cli.test_connection(args.config)
         else:
             parser.print_help()
+    except KeyboardInterrupt:
+        logging.info("Application interrupted by user")
+        sys.exit(0)
     except ETLException as e:
         logging.error(f"ETL error: {e}")
         sys.exit(1)

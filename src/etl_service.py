@@ -22,6 +22,14 @@ class ETLService:
         self.transform_service = TransformService()
         self.replication_service: Optional[ReplicationService] = None
         self.config: Optional[ETLConfig] = None
+        self._shutdown_requested = False
+    
+    def request_shutdown(self) -> None:
+        """Запрос на остановку сервиса"""
+        self.logger.info("Shutdown requested")
+        self._shutdown_requested = True
+        if self.replication_service:
+            self.replication_service.request_shutdown()
     
     def initialize(self, config_path: str) -> None:
         """Initialize ETL service with configuration"""
@@ -213,6 +221,11 @@ class ETLService:
             
             # Process events from all sources
             for source_name, event in self.replication_service.get_all_events():
+                # Проверяем флаг остановки перед обработкой каждого события
+                if self._shutdown_requested:
+                    self.logger.info("Shutdown requested, stopping event processing")
+                    break
+                    
                 self.process_event(event)
                 
         except KeyboardInterrupt:
@@ -226,9 +239,26 @@ class ETLService:
     def cleanup(self) -> None:
         """Cleanup resources"""
         try:
+            self.logger.info("Starting cleanup process")
+            
+            # Устанавливаем флаг остановки
+            self._shutdown_requested = True
+            
+            # Закрываем replication service
             if self.replication_service:
-                self.replication_service.close()
-            self.database_service.close_all_connections()
-            self.logger.info("Cleanup completed")
+                try:
+                    self.replication_service.close()
+                    self.logger.info("Replication service closed")
+                except Exception as e:
+                    self.logger.error("Error closing replication service", error=str(e))
+            
+            # Закрываем все соединения с базой данных
+            try:
+                self.database_service.close_all_connections()
+                self.logger.info("Database connections closed")
+            except Exception as e:
+                self.logger.error("Error closing database connections", error=str(e))
+            
+            self.logger.info("Cleanup completed successfully")
         except Exception as e:
             self.logger.error("Cleanup error", error=str(e))

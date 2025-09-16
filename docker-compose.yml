@@ -28,7 +28,7 @@ services:
 
   mysql-other:
     image: mysql:8.0
-    container_name: etl-mysql-source
+    container_name: etl-mysql-other
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: source_db
@@ -97,8 +97,8 @@ services:
       - mysql-source
       - mysql-target
     environment:
-      PMA_HOSTS: mysql-source,mysql-target
-      PMA_PORTS: 3306,3306
+      PMA_HOSTS: mysql-source,mysql-other,mysql-target
+      PMA_PORTS: 3306,3306,3306
       PMA_USER: root
       PMA_PASSWORD: rootpassword
     ports:

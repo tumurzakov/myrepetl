@@ -19,6 +19,13 @@ class ReplicationService:
     def __init__(self, database_service: DatabaseService):
         self.database_service = database_service
         self._streams: Dict[str, BinLogStreamReader] = {}
+        self._shutdown_requested = False
+    
+    def request_shutdown(self) -> None:
+        """Запрос на остановку сервиса"""
+        self._shutdown_requested = True
+        # Закрываем все потоки
+        self.close()
     
     def connect_to_replication(self, source_name: str, source_config: DatabaseConfig, replication_config: ReplicationConfig) -> BinLogStreamReader:
         """Connect to MySQL replication stream for a specific source"""
@@ -67,8 +74,14 @@ class ReplicationService:
         stream = self._streams[source_name]
         try:
             for binlog_event in stream:
+                # Проверяем флаг остановки перед каждым событием
+                if self._shutdown_requested:
+                    break
                 yield self._convert_binlog_event(binlog_event, source_name)
         except Exception as e:
+            if self._shutdown_requested:
+                # Если остановка запрошена, не поднимаем исключение
+                return
             raise ReplicationError(f"Error reading binlog events from source '{source_name}': {e}")
     
     def get_all_events(self) -> Generator[Tuple[str, BinlogEvent], None, None]:
@@ -76,14 +89,36 @@ class ReplicationService:
         if not self._streams:
             raise ReplicationError("No replication streams connected")
         
-        # This is a simplified implementation - in production you might want to use select/poll
-        # to handle multiple streams efficiently
-        for source_name, stream in self._streams.items():
+        # Round-robin approach: process one event from each source in turn
+        source_names = list(self._streams.keys())
+        current_source_index = 0
+        
+        while not self._shutdown_requested:
             try:
-                for binlog_event in stream:
-                    yield source_name, self._convert_binlog_event(binlog_event, source_name)
+                source_name = source_names[current_source_index]
+                stream = self._streams[source_name]
+                
+                # Try to get one event from current source
+                try:
+                    binlog_event = stream.fetchone()
+                    if binlog_event is not None:
+                        yield source_name, self._convert_binlog_event(binlog_event, source_name)
+                except Exception as e:
+                    if "no more data" in str(e).lower() or "no data" in str(e).lower():
+                        # No more events from this source, continue to next
+                        pass
+                    elif self._shutdown_requested:
+                        break
+                    else:
+                        raise ReplicationError(f"Error reading binlog events from source '{source_name}': {e}")
+                
+                # Move to next source
+                current_source_index = (current_source_index + 1) % len(source_names)
+                
             except Exception as e:
-                raise ReplicationError(f"Error reading binlog events from source '{source_name}': {e}")
+                if self._shutdown_requested:
+                    break
+                raise ReplicationError(f"Error in event processing loop: {e}")
     
     def _convert_binlog_event(self, binlog_event, source_name: str) -> BinlogEvent:
         """Convert pymysqlreplication event to our event model"""
@@ -143,16 +178,33 @@ class ReplicationService:
             # Close specific stream
             if source_name in self._streams:
                 try:
-                    self._streams[source_name].close()
+                    stream = self._streams[source_name]
+                    # Принудительно закрываем поток
+                    if hasattr(stream, 'close'):
+                        stream.close()
+                    # Дополнительно пытаемся закрыть соединение
+                    if hasattr(stream, '_stream_connection') and stream._stream_connection:
+                        try:
+                            stream._stream_connection.close()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 finally:
                     del self._streams[source_name]
         else:
             # Close all streams
-            for stream in self._streams.values():
+            for stream_name, stream in list(self._streams.items()):
                 try:
-                    stream.close()
+                    # Принудительно закрываем поток
+                    if hasattr(stream, 'close'):
+                        stream.close()
+                    # Дополнительно пытаемся закрыть соединение
+                    if hasattr(stream, '_stream_connection') and stream._stream_connection:
+                        try:
+                            stream._stream_connection.close()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
             self._streams.clear()

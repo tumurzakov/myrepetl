@@ -8,7 +8,7 @@
       "database": "source_db"
     },
     "source2": {
-      "host": "mysql-source",
+      "host": "mysql-other",
       "port": 3306,
       "user": "root",
       "password": "rootpassword",
@@ -23,6 +23,11 @@
       "password": "target_password",
       "database": "target_db"
     }
+  },
+  "replication": {
+    "server_id": 100,
+    "resume_stream": true,
+    "blocking": false
   },
   "monitoring": {
     "enabled": true,
@@ -39,6 +44,17 @@
         "email": {"column": "email"},
         "status": {"column": "status"},
         "source_id": {"column": "source_id", "value": "1"}
+      }
+    },
+    "source2.users": {
+      "target_table": "target1.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name", "transform": "transform.uppercase"},
+        "email": {"column": "email"},
+        "status": {"column": "status"},
+        "source_id": {"column": "source_id", "value": "2"}
       }
     }
   }
