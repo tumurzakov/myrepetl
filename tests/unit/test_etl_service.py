@@ -54,46 +54,55 @@ class TestETLService:
             with pytest.raises(ETLException, match="Initialization failed"):
                 service.initialize("config.json")
     
-    def test_connect_to_target_success(self):
-        """Test successful target connection"""
+    def test_connect_to_targets_success(self):
+        """Test successful target connections"""
         with patch('src.etl_service.DatabaseService') as mock_db_service:
             mock_config = Mock()
+            mock_config.targets = {
+                'target1': Mock(),
+                'target2': Mock()
+            }
             service = ETLService()
             service.config = mock_config
             
-            service.connect_to_target()
+            service.connect_to_targets()
             
-            mock_db_service.return_value.connect.assert_called_once()
+            assert mock_db_service.return_value.connect.call_count == 2
     
-    def test_connect_to_target_failure(self):
-        """Test failed target connection"""
+    def test_connect_to_targets_failure(self):
+        """Test failed target connections"""
         with patch('src.etl_service.DatabaseService') as mock_db_service:
             mock_db_service.return_value.connect.side_effect = Exception("Connection failed")
             mock_config = Mock()
+            mock_config.targets = {'target1': Mock()}
             service = ETLService()
             service.config = mock_config
             
             with pytest.raises(ETLException, match="Target connection failed"):
-                service.connect_to_target()
+                service.connect_to_targets()
     
     def test_test_connections_success(self):
         """Test successful connection testing"""
         with patch('src.etl_service.DatabaseService') as mock_db_service:
             mock_db_service.return_value.test_connection.return_value = True
             mock_config = Mock()
+            mock_config.sources = {'source1': Mock(), 'source2': Mock()}
+            mock_config.targets = {'target1': Mock(), 'target2': Mock()}
             service = ETLService()
             service.config = mock_config
             
             result = service.test_connections()
             
             assert result is True
-            assert mock_db_service.return_value.test_connection.call_count == 2
+            assert mock_db_service.return_value.test_connection.call_count == 4
     
     def test_test_connections_failure(self):
         """Test failed connection testing"""
         with patch('src.etl_service.DatabaseService') as mock_db_service:
             mock_db_service.return_value.test_connection.return_value = False
             mock_config = Mock()
+            mock_config.sources = {'source1': Mock()}
+            mock_config.targets = {'target1': Mock()}
             service = ETLService()
             service.config = mock_config
             
@@ -110,9 +119,12 @@ class TestETLService:
             
             # Setup mocks
             mock_table_mapping = Mock()
-            mock_table_mapping.target_table = "target_table"
+            mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock(), "name": Mock()}
+            
+            mock_config = Mock()
+            mock_config.parse_target_table.return_value = ("target1", "users")
             
             mock_replication_service.return_value.get_table_mapping.return_value = mock_table_mapping
             mock_transform_service.return_value.apply_column_transforms.return_value = {"id": 1, "name": "TEST"}
@@ -123,12 +135,13 @@ class TestETLService:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
-            service.config = Mock()
+            service.config = mock_config
             
             event = InsertEvent(
                 schema="test_schema",
                 table="test_table",
-                values={"id": 1, "name": "test"}
+                values={"id": 1, "name": "test"},
+                source_name="source1"
             )
             
             # Process event
@@ -136,9 +149,10 @@ class TestETLService:
             
             # Verify calls
             mock_replication_service.return_value.get_table_mapping.assert_called_once()
+            mock_config.parse_target_table.assert_called_once_with("target1.users")
             mock_transform_service.return_value.apply_column_transforms.assert_called_once()
-            mock_sql_builder.build_upsert_sql.assert_called_once()
-            mock_db_service.return_value.execute_update.assert_called_once()
+            mock_sql_builder.build_upsert_sql.assert_called_once_with("users", {"id": 1, "name": "TEST"}, "id")
+            mock_db_service.return_value.execute_update.assert_called_once_with("INSERT SQL", [1, "TEST"], "target1")
     
     def test_process_event_update(self):
         """Test processing UPDATE event"""
@@ -149,9 +163,12 @@ class TestETLService:
             
             # Setup mocks
             mock_table_mapping = Mock()
-            mock_table_mapping.target_table = "target_table"
+            mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock(), "name": Mock()}
+            
+            mock_config = Mock()
+            mock_config.parse_target_table.return_value = ("target1", "users")
             
             mock_replication_service.return_value.get_table_mapping.return_value = mock_table_mapping
             mock_transform_service.return_value.apply_column_transforms.return_value = {"id": 1, "name": "UPDATED"}
@@ -162,13 +179,14 @@ class TestETLService:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
-            service.config = Mock()
+            service.config = mock_config
             
             event = UpdateEvent(
                 schema="test_schema",
                 table="test_table",
                 before_values={"id": 1, "name": "old"},
-                after_values={"id": 1, "name": "new"}
+                after_values={"id": 1, "name": "new"},
+                source_name="source1"
             )
             
             # Process event
@@ -176,11 +194,12 @@ class TestETLService:
             
             # Verify calls
             mock_replication_service.return_value.get_table_mapping.assert_called_once()
+            mock_config.parse_target_table.assert_called_once_with("target1.users")
             mock_transform_service.return_value.apply_column_transforms.assert_called_once_with(
                 {"id": 1, "name": "new"}, mock_table_mapping.column_mapping
             )
-            mock_sql_builder.build_upsert_sql.assert_called_once()
-            mock_db_service.return_value.execute_update.assert_called_once()
+            mock_sql_builder.build_upsert_sql.assert_called_once_with("users", {"id": 1, "name": "UPDATED"}, "id")
+            mock_db_service.return_value.execute_update.assert_called_once_with("UPDATE SQL", [1, "UPDATED"], "target1")
     
     def test_process_event_delete(self):
         """Test processing DELETE event"""
@@ -191,9 +210,12 @@ class TestETLService:
             
             # Setup mocks
             mock_table_mapping = Mock()
-            mock_table_mapping.target_table = "target_table"
+            mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock()}
+            
+            mock_config = Mock()
+            mock_config.parse_target_table.return_value = ("target1", "users")
             
             mock_replication_service.return_value.get_table_mapping.return_value = mock_table_mapping
             mock_transform_service.return_value.apply_column_transforms.return_value = {"id": 1}
@@ -204,12 +226,13 @@ class TestETLService:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
-            service.config = Mock()
+            service.config = mock_config
             
             event = DeleteEvent(
                 schema="test_schema",
                 table="test_table",
-                values={"id": 1, "name": "test"}
+                values={"id": 1, "name": "test"},
+                source_name="source1"
             )
             
             # Process event
@@ -217,9 +240,10 @@ class TestETLService:
             
             # Verify calls
             mock_replication_service.return_value.get_table_mapping.assert_called_once()
+            mock_config.parse_target_table.assert_called_once_with("target1.users")
             mock_transform_service.return_value.apply_column_transforms.assert_called_once()
-            mock_sql_builder.build_delete_sql.assert_called_once()
-            mock_db_service.return_value.execute_update.assert_called_once()
+            mock_sql_builder.build_delete_sql.assert_called_once_with("users", {"id": 1}, "id")
+            mock_db_service.return_value.execute_update.assert_called_once_with("DELETE SQL", [1], "target1")
     
     def test_process_event_no_mapping(self):
         """Test processing event with no table mapping"""
@@ -261,45 +285,54 @@ class TestETLService:
     
     def test_run_replication_success(self):
         """Test successful replication run"""
-        with patch('src.etl_service.ETLService.connect_to_target') as mock_connect, \
+        with patch('src.etl_service.ETLService.connect_to_targets') as mock_connect, \
              patch('src.etl_service.ReplicationService') as mock_replication_service:
             
             mock_stream = Mock()
             mock_event = Mock()
             mock_stream.__iter__ = Mock(return_value=iter([mock_event]))
             mock_replication_service.return_value.connect_to_replication.return_value = mock_stream
-            mock_replication_service.return_value.get_events.return_value = [mock_event]
+            mock_replication_service.return_value.get_all_events.return_value = [("source1", mock_event)]
+            
+            mock_config = Mock()
+            mock_config.sources = {'source1': Mock(), 'source2': Mock()}
+            mock_config.replication = Mock()
             
             service = ETLService()
             service.replication_service = mock_replication_service.return_value
-            service.config = Mock()
+            service.config = mock_config
             
             with patch.object(service, 'process_event') as mock_process:
                 service.run_replication()
                 
                 mock_connect.assert_called_once()
+                assert mock_replication_service.return_value.connect_to_replication.call_count == 2
                 mock_process.assert_called_once_with(mock_event)
     
     def test_run_replication_keyboard_interrupt(self):
         """Test replication run with keyboard interrupt"""
-        with patch('src.etl_service.ETLService.connect_to_target') as mock_connect, \
+        with patch('src.etl_service.ETLService.connect_to_targets') as mock_connect, \
              patch('src.etl_service.ReplicationService') as mock_replication_service:
             
             mock_stream = Mock()
             mock_stream.__iter__ = Mock(side_effect=KeyboardInterrupt())
             mock_replication_service.return_value.connect_to_replication.return_value = mock_stream
-            mock_replication_service.return_value.get_events.return_value = iter([])
+            mock_replication_service.return_value.get_all_events.return_value = iter([])
+            
+            mock_config = Mock()
+            mock_config.sources = {'source1': Mock()}
+            mock_config.replication = Mock()
             
             service = ETLService()
             service.replication_service = mock_replication_service.return_value
-            service.config = Mock()
+            service.config = mock_config
             
             # Should not raise exception
             service.run_replication()
     
     def test_run_replication_error(self):
         """Test replication run with error"""
-        with patch('src.etl_service.ETLService.connect_to_target') as mock_connect:
+        with patch('src.etl_service.ETLService.connect_to_targets') as mock_connect:
             mock_connect.side_effect = Exception("Connection error")
             
             service = ETLService()

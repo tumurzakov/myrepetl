@@ -22,6 +22,7 @@ class BinlogEvent:
     table: str
     event_type: EventType = None
     timestamp: Optional[int] = None
+    source_name: Optional[str] = None
     
     def __post_init__(self):
         """Validate event after initialization"""

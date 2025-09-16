@@ -5,6 +5,8 @@ MySQL Replication ETL Tool - инструмент для репликации д
 ## Возможности
 
 - **Репликация в реальном времени**: Чтение binlog событий MySQL
+- **Множественные источники**: Поддержка нескольких источников данных одновременно
+- **Множественные приемники**: Возможность репликации в несколько целевых баз данных
 - **Гибкие трансформации**: Поддержка пользовательских функций трансформации
 - **Конфигурируемые mapping'и**: Настройка соответствия таблиц и колонок
 - **Мониторинг**: Логирование и отслеживание процесса репликации
@@ -113,21 +115,37 @@ make test-fast
 
 ```json
 {
-  "source": {
-    "host": "mysql-source",
-    "port": 3306,
-    "user": "root",
-    "password": "rootpassword",
-    "database": "source_db",
-    "server_id": 100,
-    "tables": ["*"]
+  "sources": {
+    "source1": {
+      "host": "mysql-source1",
+      "port": 3306,
+      "user": "root",
+      "password": "rootpassword",
+      "database": "source_db1"
+    },
+    "source2": {
+      "host": "mysql-source2",
+      "port": 3306,
+      "user": "root",
+      "password": "rootpassword",
+      "database": "source_db2"
+    }
   },
-  "target": {
-    "host": "mysql-target",
-    "port": 3306,
-    "user": "target_user",
-    "password": "target_password",
-    "database": "target_db"
+  "targets": {
+    "target1": {
+      "host": "mysql-target1",
+      "port": 3306,
+      "user": "target_user",
+      "password": "target_password",
+      "database": "target_db1"
+    },
+    "target2": {
+      "host": "mysql-target2",
+      "port": 3306,
+      "user": "target_user",
+      "password": "target_password",
+      "database": "target_db2"
+    }
   },
   "replication": {
     "server_id": 100,
@@ -142,14 +160,24 @@ make test-fast
     "log_level": "INFO"
   },
   "mapping": {
-    "source_db.users": {
-      "target_table": "target_db.users",
+    "source1.users": {
+      "target_table": "target1.users",
       "primary_key": "id",
       "column_mapping": {
         "id": {"column": "id", "primary_key": true},
         "name": {"column": "name", "transform": "transform.uppercase"},
         "email": {"column": "email"},
         "source_id": {"column": "source_id", "value": "1"}
+      }
+    },
+    "source2.orders": {
+      "target_table": "target2.orders",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "user_id": {"column": "user_id"},
+        "amount": {"column": "amount"},
+        "source_id": {"column": "source_id", "value": "2"}
       }
     }
   }
@@ -158,16 +186,18 @@ make test-fast
 
 ### Параметры конфигурации
 
-#### Source (Источник)
+#### Sources (Источники)
+Секция `sources` содержит словарь с конфигурациями источников данных. Каждый источник имеет уникальное имя и следующие параметры:
+
 - `host`: Хост MySQL сервера
 - `port`: Порт (по умолчанию 3306)
 - `user`: Имя пользователя
 - `password`: Пароль
 - `database`: Имя базы данных
-- `server_id`: ID сервера для репликации
-- `tables`: Список таблиц для репликации (["*"] для всех)
 
-#### Target (Цель)
+#### Targets (Приемники)
+Секция `targets` содержит словарь с конфигурациями целевых баз данных. Каждый приемник имеет уникальное имя и следующие параметры:
+
 - `host`: Хост целевого MySQL сервера
 - `port`: Порт (по умолчанию 3306)
 - `user`: Имя пользователя
@@ -182,13 +212,20 @@ make test-fast
 - `blocking`: Блокирующий режим чтения
 
 #### Mapping (Соответствие)
-- `target_table`: Имя целевой таблицы
+Секция `mapping` определяет соответствие между таблицами источников и приемников. Ключ имеет формат `{source_name}.{table_name}`, а значение содержит:
+
+- `target_table`: Имя целевой таблицы в формате `{target_name}.{table_name}`
 - `primary_key`: Первичный ключ для upsert операций
 - `column_mapping`: Соответствие колонок:
   - `column`: Имя целевой колонки
   - `primary_key`: Флаг первичного ключа
   - `transform`: Путь к функции трансформации
   - `value`: Статическое значение
+
+**Примеры маппинга:**
+- `"source1.users"` → `"target1.users"` - таблица users из source1 в target1
+- `"source2.orders"` → `"target2.orders"` - таблица orders из source2 в target2
+- `"source1.users"` → `"target2.users"` - таблица users из source1 в target2
 
 ## Трансформации
 
@@ -251,6 +288,121 @@ def custom_transform(value):
 ```
 
 ## Использование
+
+### Примеры конфигураций
+
+#### Простая конфигурация с одним источником и одним приемником
+
+```json
+{
+  "sources": {
+    "main_source": {
+      "host": "mysql-source",
+      "port": 3306,
+      "user": "root",
+      "password": "rootpassword",
+      "database": "source_db"
+    }
+  },
+  "targets": {
+    "main_target": {
+      "host": "mysql-target",
+      "port": 3306,
+      "user": "target_user",
+      "password": "target_password",
+      "database": "target_db"
+    }
+  },
+  "replication": {
+    "server_id": 100
+  },
+  "mapping": {
+    "main_source.users": {
+      "target_table": "main_target.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"},
+        "email": {"column": "email"}
+      }
+    }
+  }
+}
+```
+
+#### Конфигурация с множественными источниками и приемниками
+
+```json
+{
+  "sources": {
+    "ecommerce_db": {
+      "host": "ecommerce-mysql",
+      "port": 3306,
+      "user": "repl_user",
+      "password": "repl_password",
+      "database": "ecommerce"
+    },
+    "analytics_db": {
+      "host": "analytics-mysql",
+      "port": 3306,
+      "user": "repl_user",
+      "password": "repl_password",
+      "database": "analytics"
+    }
+  },
+  "targets": {
+    "data_warehouse": {
+      "host": "warehouse-mysql",
+      "port": 3306,
+      "user": "dw_user",
+      "password": "dw_password",
+      "database": "data_warehouse"
+    },
+    "reporting_db": {
+      "host": "reporting-mysql",
+      "port": 3306,
+      "user": "report_user",
+      "password": "report_password",
+      "database": "reporting"
+    }
+  },
+  "replication": {
+    "server_id": 100
+  },
+  "mapping": {
+    "ecommerce_db.users": {
+      "target_table": "data_warehouse.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name", "transform": "transform.uppercase"},
+        "email": {"column": "email", "transform": "transform.lowercase"},
+        "source_system": {"column": "source_system", "value": "ecommerce"}
+      }
+    },
+    "ecommerce_db.orders": {
+      "target_table": "data_warehouse.orders",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "user_id": {"column": "user_id"},
+        "amount": {"column": "amount"},
+        "source_system": {"column": "source_system", "value": "ecommerce"}
+      }
+    },
+    "analytics_db.events": {
+      "target_table": "reporting.events",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "event_type": {"column": "event_type"},
+        "timestamp": {"column": "timestamp"},
+        "source_system": {"column": "source_system", "value": "analytics"}
+      }
+    }
+  }
+}
+```
 
 ### CLI команды
 

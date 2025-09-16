@@ -22,26 +22,30 @@ class TestConfigService:
     def test_load_json_config(self):
         """Test loading JSON configuration"""
         config_data = {
-            "source": {
-                "host": "source_host",
-                "port": 3306,
-                "user": "source_user",
-                "password": "source_password",
-                "database": "source_db"
+            "sources": {
+                "source1": {
+                    "host": "source_host",
+                    "port": 3306,
+                    "user": "source_user",
+                    "password": "source_password",
+                    "database": "source_db"
+                }
             },
-            "target": {
-                "host": "target_host",
-                "port": 3306,
-                "user": "target_user",
-                "password": "target_password",
-                "database": "target_db"
+            "targets": {
+                "target1": {
+                    "host": "target_host",
+                    "port": 3306,
+                    "user": "target_user",
+                    "password": "target_password",
+                    "database": "target_db"
+                }
             },
             "replication": {
                 "server_id": 100
             },
             "mapping": {
-                "source_db.users": {
-                    "target_table": "target_db.users",
+                "source1.users": {
+                    "target_table": "target1.users",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -60,36 +64,40 @@ class TestConfigService:
             config = service.load_config(config_path)
             
             assert isinstance(config, ETLConfig)
-            assert config.source.host == "source_host"
-            assert config.target.host == "target_host"
+            assert config.sources["source1"].host == "source_host"
+            assert config.targets["target1"].host == "target_host"
             assert config.replication.server_id == 100
-            assert "source_db.users" in config.mapping
+            assert "source1.users" in config.mapping
         finally:
             os.unlink(config_path)
     
     def test_load_yaml_config(self):
         """Test loading YAML configuration"""
         config_data = {
-            "source": {
-                "host": "source_host",
-                "port": 3306,
-                "user": "source_user",
-                "password": "source_password",
-                "database": "source_db"
+            "sources": {
+                "source1": {
+                    "host": "source_host",
+                    "port": 3306,
+                    "user": "source_user",
+                    "password": "source_password",
+                    "database": "source_db"
+                }
             },
-            "target": {
-                "host": "target_host",
-                "port": 3306,
-                "user": "target_user",
-                "password": "target_password",
-                "database": "target_db"
+            "targets": {
+                "target1": {
+                    "host": "target_host",
+                    "port": 3306,
+                    "user": "target_user",
+                    "password": "target_password",
+                    "database": "target_db"
+                }
             },
             "replication": {
                 "server_id": 100
             },
             "mapping": {
-                "source_db.users": {
-                    "target_table": "target_db.users",
+                "source1.users": {
+                    "target_table": "target1.users",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -109,7 +117,7 @@ class TestConfigService:
             config = service.load_config(config_path)
             
             assert isinstance(config, ETLConfig)
-            assert config.source.host == "source_host"
+            assert config.sources["source1"].host == "source_host"
         finally:
             os.unlink(config_path)
     
@@ -152,12 +160,12 @@ class TestConfigService:
         
         # Valid config
         valid_config = ETLConfig(
-            source=DatabaseConfig(host="localhost", user="user", password="pass", database="db"),
-            target=DatabaseConfig(host="localhost", user="user", password="pass", database="db"),
+            sources={"source1": DatabaseConfig(host="localhost", user="user", password="pass", database="db")},
+            targets={"target1": DatabaseConfig(host="localhost", user="user", password="pass", database="db")},
             replication=Mock(),
             mapping={
-                "db.table": Mock(
-                    target_table="target_table",
+                "source1.table": Mock(
+                    target_table="target1.table",
                     primary_key="id",
                     column_mapping={"id": Mock(column="id")}
                 )
@@ -168,10 +176,10 @@ class TestConfigService:
         
         # Invalid config - test with mock to avoid validation errors
         invalid_config = Mock()
-        invalid_config.source = Mock()
-        invalid_config.source.to_connection_params.return_value = {}  # Missing required keys
-        invalid_config.target = Mock()
-        invalid_config.target.to_connection_params.return_value = {}  # Missing required keys
+        invalid_config.sources = {"source1": Mock()}
+        invalid_config.sources["source1"].to_connection_params.return_value = {}  # Missing required keys
+        invalid_config.targets = {"target1": Mock()}
+        invalid_config.targets["target1"].to_connection_params.return_value = {}  # Missing required keys
         invalid_config.mapping = {}
         
         assert service.validate_config(invalid_config) is False
@@ -558,7 +566,7 @@ class TestReplicationService:
             )
             replication_config = Mock()
             
-            result = service.connect_to_replication(source_config, replication_config)
+            result = service.connect_to_replication("source1", source_config, replication_config)
             
             # The result should be a BinLogStreamReader instance, not the mock
             assert result is not None
@@ -578,15 +586,15 @@ class TestReplicationService:
         )
         replication_config = Mock()
         
-        with pytest.raises(ReplicationError, match="Failed to connect to replication: Master status failed"):
-            service.connect_to_replication(source_config, replication_config)
+        with pytest.raises(ReplicationError, match="Failed to connect to replication for source 'source1': Master status failed"):
+            service.connect_to_replication("source1", source_config, replication_config)
     
     def test_get_events_not_connected(self):
         """Test getting events when not connected"""
         service = ReplicationService(Mock())
         
-        with pytest.raises(ReplicationError, match="Replication stream not connected"):
-            list(service.get_events())
+        with pytest.raises(ReplicationError, match="Replication stream for source 'source1' not connected"):
+            list(service.get_events("source1"))
     
     def test_get_events_success(self):
         """Test successful event retrieval"""
@@ -597,9 +605,9 @@ class TestReplicationService:
         mock_stream.__iter__ = Mock(return_value=iter([mock_event]))
         
         service = ReplicationService(Mock())
-        service._stream = mock_stream
+        service._streams = {"source1": mock_stream}
         
-        events = list(service.get_events())
+        events = list(service.get_events("source1"))
         assert len(events) == 1
         assert events[0].schema == "test_schema"
         assert events[0].table == "test_table"
@@ -608,9 +616,9 @@ class TestReplicationService:
         """Test closing replication service"""
         mock_stream = Mock()
         service = ReplicationService(Mock())
-        service._stream = mock_stream
+        service._streams = {"source1": mock_stream}
         
         service.close()
         
-        assert service._stream is None
+        assert service._streams == {}
         mock_stream.close.assert_called_once()

@@ -235,26 +235,30 @@ class TestETLConfig:
     def test_from_dict(self):
         """Test creating ETLConfig from dictionary"""
         config_dict = {
-            "source": {
-                "host": "source_host",
-                "port": 3306,
-                "user": "source_user",
-                "password": "source_password",
-                "database": "source_db"
+            "sources": {
+                "source1": {
+                    "host": "source_host",
+                    "port": 3306,
+                    "user": "source_user",
+                    "password": "source_password",
+                    "database": "source_db"
+                }
             },
-            "target": {
-                "host": "target_host",
-                "port": 3306,
-                "user": "target_user",
-                "password": "target_password",
-                "database": "target_db"
+            "targets": {
+                "target1": {
+                    "host": "target_host",
+                    "port": 3306,
+                    "user": "target_user",
+                    "password": "target_password",
+                    "database": "target_db"
+                }
             },
             "replication": {
                 "server_id": 100
             },
             "mapping": {
-                "source_db.users": {
-                    "target_table": "target_db.users",
+                "source1.users": {
+                    "target_table": "target1.users",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -267,40 +271,44 @@ class TestETLConfig:
         
         config = ETLConfig.from_dict(config_dict)
         
-        assert config.source.host == "source_host"
-        assert config.target.host == "target_host"
+        assert config.sources["source1"].host == "source_host"
+        assert config.targets["target1"].host == "target_host"
         assert config.replication.server_id == 100
-        assert "source_db.users" in config.mapping
+        assert "source1.users" in config.mapping
     
     def test_from_dict_missing_required(self):
         """Test missing required fields in dictionary"""
         config_dict = {
-            "source": {
-                "host": "source_host",
-                "user": "source_user",
-                "password": "source_password",
-                "database": "source_db"
+            "sources": {
+                "source1": {
+                    "host": "source_host",
+                    "user": "source_user",
+                    "password": "source_password",
+                    "database": "source_db"
+                }
             }
-            # Missing target
+            # Missing targets
         }
         
-        with pytest.raises(ConfigurationError, match="Missing required configuration key"):
+        with pytest.raises(ConfigurationError, match="At least one target is required"):
             ETLConfig.from_dict(config_dict)
     
     def test_from_dict_invalid_format(self):
         """Test invalid format in dictionary"""
         config_dict = {
-            "source": "invalid_format",  # Should be dict
-            "target": {
-                "host": "target_host",
-                "user": "target_user",
-                "password": "target_password",
-                "database": "target_db"
+            "sources": "invalid_format",  # Should be dict
+            "targets": {
+                "target1": {
+                    "host": "target_host",
+                    "user": "target_user",
+                    "password": "target_password",
+                    "database": "target_db"
+                }
             },
             "mapping": {}
         }
         
-        with pytest.raises(ConfigurationError, match="Invalid configuration format"):
+        with pytest.raises(ConfigurationError, match="Sources must be a dictionary"):
             ETLConfig.from_dict(config_dict)
 
 

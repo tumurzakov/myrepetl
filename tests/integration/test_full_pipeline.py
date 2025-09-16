@@ -20,19 +20,23 @@ class TestFullPipeline:
     def sample_config(self):
         """Create sample configuration for testing"""
         config_data = {
-            "source": {
-                "host": "localhost",
-                "port": 3306,
-                "user": "source_user",
-                "password": "source_password",
-                "database": "source_db"
+            "sources": {
+                "source1": {
+                    "host": "localhost",
+                    "port": 3306,
+                    "user": "source_user",
+                    "password": "source_password",
+                    "database": "source_db"
+                }
             },
-            "target": {
-                "host": "localhost",
-                "port": 3306,
-                "user": "target_user",
-                "password": "target_password",
-                "database": "target_db"
+            "targets": {
+                "target1": {
+                    "host": "localhost",
+                    "port": 3306,
+                    "user": "target_user",
+                    "password": "target_password",
+                    "database": "target_db"
+                }
             },
             "replication": {
                 "server_id": 100,
@@ -40,8 +44,8 @@ class TestFullPipeline:
                 "log_pos": 4
             },
             "mapping": {
-                "source_db.users": {
-                    "target_table": "target_db.users",
+                "source1.users": {
+                    "target_table": "target1.users",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -70,26 +74,30 @@ class TestFullPipeline:
             
             # Mock config service to return real config
             mock_config_service.return_value.load_config.return_value = ETLConfig.from_dict({
-                "source": {
-                    "host": "localhost",
-                    "port": 3306,
-                    "user": "source_user",
-                    "password": "source_password",
-                    "database": "source_db"
+                "sources": {
+                    "source1": {
+                        "host": "localhost",
+                        "port": 3306,
+                        "user": "source_user",
+                        "password": "source_password",
+                        "database": "source_db"
+                    }
                 },
-                "target": {
-                    "host": "localhost",
-                    "port": 3306,
-                    "user": "target_user",
-                    "password": "target_password",
-                    "database": "target_db"
+                "targets": {
+                    "target1": {
+                        "host": "localhost",
+                        "port": 3306,
+                        "user": "target_user",
+                        "password": "target_password",
+                        "database": "target_db"
+                    }
                 },
                 "replication": {
                     "server_id": 100
                 },
                 "mapping": {
-                    "source_db.users": {
-                        "target_table": "target_db.users",
+                    "source1.users": {
+                        "target_table": "target1.users",
                         "primary_key": "id",
                         "column_mapping": {
                             "id": {"column": "id", "primary_key": True},
@@ -104,9 +112,9 @@ class TestFullPipeline:
             service.initialize(sample_config)
             
             assert service.config is not None
-            assert service.config.source.host == "localhost"
-            assert service.config.target.host == "localhost"
-            assert "source_db.users" in service.config.mapping
+            assert service.config.sources["source1"].host == "localhost"
+            assert service.config.targets["target1"].host == "localhost"
+            assert "source1.users" in service.config.mapping
     
     def test_connection_testing(self, sample_config):
         """Test connection testing functionality"""
@@ -115,12 +123,12 @@ class TestFullPipeline:
             
             service = ETLService()
             service.config = ETLConfig(
-                source=DatabaseConfig(host="localhost", user="user", password="pass", database="db"),
-                target=DatabaseConfig(host="localhost", user="user", password="pass", database="db"),
+                sources={"source1": DatabaseConfig(host="localhost", user="user", password="pass", database="db")},
+                targets={"target1": DatabaseConfig(host="localhost", user="user", password="pass", database="db")},
                 replication=ReplicationConfig(),
                 mapping={
-                    "db.table": TableMapping(
-                        target_table="target_table",
+                    "source1.table": TableMapping(
+                        target_table="target1.table",
                         primary_key="id",
                         column_mapping={"id": ColumnMapping(column="id")}
                     )
@@ -139,7 +147,7 @@ class TestFullPipeline:
             
             # Setup mocks
             mock_table_mapping = TableMapping(
-                target_table="target_db.users",
+                target_table="target1.users",
                 primary_key="id",
                 column_mapping={
                     "id": ColumnMapping(column="id", primary_key=True),
@@ -157,6 +165,7 @@ class TestFullPipeline:
             service.replication_service = mock_replication_service.return_value
             service.database_service = mock_db_service.return_value
             service.config = Mock()
+            service.config.parse_target_table.return_value = ("target1", "users")
             
             # Load transform module
             service.transform_service.load_transform_module()
@@ -165,7 +174,8 @@ class TestFullPipeline:
             event = InsertEvent(
                 schema="source_db",
                 table="users",
-                values={"id": 1, "name": "test", "email": "test@example.com"}
+                values={"id": 1, "name": "test", "email": "test@example.com"},
+                source_name="source1"
             )
             
             # Process event
@@ -183,7 +193,7 @@ class TestFullPipeline:
     
     def test_full_replication_cycle(self, sample_config):
         """Test full replication cycle with mocked components"""
-        with patch('src.etl_service.ETLService.connect_to_target') as mock_connect, \
+        with patch('src.etl_service.ETLService.connect_to_targets') as mock_connect, \
              patch('src.etl_service.ReplicationService') as mock_replication_service, \
              patch('src.etl_service.TransformService') as mock_transform_service, \
              patch('src.etl_service.DatabaseService') as mock_db_service, \
@@ -194,14 +204,15 @@ class TestFullPipeline:
             mock_event = InsertEvent(
                 schema="source_db",
                 table="users",
-                values={"id": 1, "name": "test", "email": "test@example.com"}
+                values={"id": 1, "name": "test", "email": "test@example.com"},
+                source_name="source1"
             )
             mock_stream.__iter__ = Mock(return_value=iter([mock_event]))
             
             mock_replication_service.return_value.connect_to_replication.return_value = mock_stream
-            mock_replication_service.return_value.get_events.return_value = [mock_event]
+            mock_replication_service.return_value.get_all_events.return_value = [("source1", mock_event)]
             mock_replication_service.return_value.get_table_mapping.return_value = TableMapping(
-                target_table="target_db.users",
+                target_table="target1.users",
                 primary_key="id",
                 column_mapping={
                     "id": ColumnMapping(column="id", primary_key=True),
@@ -221,6 +232,9 @@ class TestFullPipeline:
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
             service.config = Mock()
+            service.config.sources = {"source1": Mock()}
+            service.config.replication = Mock()
+            service.config.parse_target_table.return_value = ("target1", "users")
             
             service.run_replication()
             
@@ -233,7 +247,7 @@ class TestFullPipeline:
     
     def test_error_handling_in_replication(self, sample_config):
         """Test error handling during replication"""
-        with patch('src.etl_service.ETLService.connect_to_target') as mock_connect, \
+        with patch('src.etl_service.ETLService.connect_to_targets') as mock_connect, \
              patch('src.etl_service.ReplicationService') as mock_replication_service:
             
             # Setup mock to raise exception
@@ -267,12 +281,12 @@ class TestFullPipeline:
         """Test configuration validation with real config objects"""
         # Valid config
         valid_config = ETLConfig(
-            source=DatabaseConfig(host="localhost", user="user", password="pass", database="db"),
-            target=DatabaseConfig(host="localhost", user="user", password="pass", database="db"),
+            sources={"source1": DatabaseConfig(host="localhost", user="user", password="pass", database="db")},
+            targets={"target1": DatabaseConfig(host="localhost", user="user", password="pass", database="db")},
             replication=ReplicationConfig(),
             mapping={
-                "db.table": TableMapping(
-                    target_table="target_table",
+                "source1.table": TableMapping(
+                    target_table="target1.table",
                     primary_key="id",
                     column_mapping={"id": ColumnMapping(column="id")}
                 )

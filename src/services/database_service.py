@@ -15,6 +15,7 @@ class DatabaseService:
     
     def __init__(self):
         self._connections: Dict[str, pymysql.Connection] = {}
+        self._connection_configs: Dict[str, DatabaseConfig] = {}
     
     def connect(self, config: DatabaseConfig, connection_name: str = "default") -> pymysql.Connection:
         """Connect to database"""
@@ -22,6 +23,7 @@ class DatabaseService:
             connection_params = config.to_connection_params()
             connection = pymysql.connect(**connection_params)
             self._connections[connection_name] = connection
+            self._connection_configs[connection_name] = config
             return connection
         except Exception as e:
             raise ConnectionError(f"Failed to connect to database: {e}")
@@ -100,6 +102,31 @@ class DatabaseService:
         finally:
             self.close_connection("test")
     
+    def get_connection_config(self, connection_name: str) -> DatabaseConfig:
+        """Get connection configuration by name"""
+        if connection_name not in self._connection_configs:
+            raise ConnectionError(f"Connection config '{connection_name}' not found")
+        return self._connection_configs[connection_name]
+    
+    def is_connected(self, connection_name: str) -> bool:
+        """Check if connection is active"""
+        if connection_name not in self._connections:
+            return False
+        try:
+            connection = self._connections[connection_name]
+            connection.ping(reconnect=False)
+            return True
+        except Exception:
+            return False
+    
+    def reconnect_if_needed(self, connection_name: str) -> None:
+        """Reconnect if connection is lost"""
+        if not self.is_connected(connection_name):
+            if connection_name in self._connection_configs:
+                config = self._connection_configs[connection_name]
+                self.close_connection(connection_name)
+                self.connect(config, connection_name)
+    
     def close_connection(self, connection_name: str = "default") -> None:
         """Close database connection"""
         if connection_name in self._connections:
@@ -109,6 +136,8 @@ class DatabaseService:
                 pass
             finally:
                 del self._connections[connection_name]
+                if connection_name in self._connection_configs:
+                    del self._connection_configs[connection_name]
     
     def close_all_connections(self) -> None:
         """Close all database connections"""

@@ -51,15 +51,17 @@ class ConfigService:
     def validate_config(self, config: ETLConfig) -> bool:
         """Validate configuration"""
         try:
-            # Test source connection parameters
-            source_params = config.source.to_connection_params()
-            if not all(key in source_params for key in ['host', 'port', 'user', 'password']):
-                return False
+            # Test all source connection parameters
+            for source_name, source_config in config.sources.items():
+                source_params = source_config.to_connection_params()
+                if not all(key in source_params for key in ['host', 'port', 'user', 'password']):
+                    return False
             
-            # Test target connection parameters
-            target_params = config.target.to_connection_params()
-            if not all(key in target_params for key in ['host', 'port', 'user', 'password', 'database']):
-                return False
+            # Test all target connection parameters
+            for target_name, target_config in config.targets.items():
+                target_params = target_config.to_connection_params()
+                if not all(key in target_params for key in ['host', 'port', 'user', 'password', 'database']):
+                    return False
             
             # Validate table mappings
             for table_key, table_mapping in config.mapping.items():
@@ -68,6 +70,12 @@ class ConfigService:
                 
                 # Check if primary key exists in column mapping
                 if table_mapping.primary_key not in table_mapping.column_mapping:
+                    return False
+                
+                # Validate target table format (target_name.table_name)
+                try:
+                    config.parse_target_table(table_mapping.target_table)
+                except ConfigurationError:
                     return False
             
             return True

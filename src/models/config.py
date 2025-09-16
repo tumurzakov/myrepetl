@@ -3,7 +3,7 @@ Configuration models for MySQL Replication ETL
 """
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from ..exceptions import ConfigurationError
 
 
@@ -96,14 +96,18 @@ class TableMapping:
 @dataclass
 class ETLConfig:
     """Main ETL configuration"""
-    source: DatabaseConfig
-    target: DatabaseConfig
+    sources: Dict[str, DatabaseConfig]
+    targets: Dict[str, DatabaseConfig]
     replication: ReplicationConfig
     mapping: Dict[str, TableMapping]
     monitoring: Optional[Dict[str, Any]] = None
     
     def __post_init__(self):
         """Validate configuration after initialization"""
+        if not self.sources:
+            raise ConfigurationError("At least one source is required")
+        if not self.targets:
+            raise ConfigurationError("At least one target is required")
         if not self.mapping:
             raise ConfigurationError("Table mapping is required")
     
@@ -111,11 +115,21 @@ class ETLConfig:
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'ETLConfig':
         """Create ETLConfig from dictionary"""
         try:
-            # Convert source config
-            source_config = DatabaseConfig(**config_dict['source'])
+            # Convert sources config
+            sources = {}
+            sources_data = config_dict.get('sources', {})
+            if not isinstance(sources_data, dict):
+                raise ConfigurationError("Sources must be a dictionary")
+            for source_name, source_config in sources_data.items():
+                sources[source_name] = DatabaseConfig(**source_config)
             
-            # Convert target config
-            target_config = DatabaseConfig(**config_dict['target'])
+            # Convert targets config
+            targets = {}
+            targets_data = config_dict.get('targets', {})
+            if not isinstance(targets_data, dict):
+                raise ConfigurationError("Targets must be a dictionary")
+            for target_name, target_config in targets_data.items():
+                targets[target_name] = DatabaseConfig(**target_config)
             
             # Convert replication config
             replication_config = ReplicationConfig(**config_dict.get('replication', {}))
@@ -138,8 +152,8 @@ class ETLConfig:
                 )
             
             return cls(
-                source=source_config,
-                target=target_config,
+                sources=sources,
+                targets=targets,
                 replication=replication_config,
                 mapping=mapping,
                 monitoring=config_dict.get('monitoring')
@@ -148,3 +162,26 @@ class ETLConfig:
             raise ConfigurationError(f"Missing required configuration key: {e}")
         except TypeError as e:
             raise ConfigurationError(f"Invalid configuration format: {e}")
+    
+    def get_source_config(self, source_name: str) -> DatabaseConfig:
+        """Get source configuration by name"""
+        if source_name not in self.sources:
+            raise ConfigurationError(f"Source '{source_name}' not found")
+        return self.sources[source_name]
+    
+    def get_target_config(self, target_name: str) -> DatabaseConfig:
+        """Get target configuration by name"""
+        if target_name not in self.targets:
+            raise ConfigurationError(f"Target '{target_name}' not found")
+        return self.targets[target_name]
+    
+    def parse_target_table(self, target_table: str) -> Tuple[str, str]:
+        """Parse target table string like 'target1.users' into (target_name, table_name)"""
+        if '.' not in target_table:
+            raise ConfigurationError(f"Target table must be in format 'target_name.table_name', got: {target_table}")
+        
+        target_name, table_name = target_table.split('.', 1)
+        if target_name not in self.targets:
+            raise ConfigurationError(f"Target '{target_name}' not found in configuration")
+        
+        return target_name, table_name
