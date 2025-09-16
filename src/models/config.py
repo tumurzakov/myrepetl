@@ -82,6 +82,7 @@ class TableMapping:
     target_table: str
     primary_key: str
     column_mapping: Dict[str, ColumnMapping]
+    filter: Optional[Dict[str, Any]] = None
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -148,7 +149,8 @@ class ETLConfig:
                 mapping[table_key] = TableMapping(
                     target_table=table_config['target_table'],
                     primary_key=table_config['primary_key'],
-                    column_mapping=column_mapping
+                    column_mapping=column_mapping,
+                    filter=table_config.get('filter')
                 )
             
             return cls(

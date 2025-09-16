@@ -8,7 +8,7 @@ import structlog
 from .exceptions import ETLException
 from .models.config import ETLConfig
 from .models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent
-from .services import ConfigService, DatabaseService, TransformService, ReplicationService
+from .services import ConfigService, DatabaseService, TransformService, ReplicationService, FilterService
 from .utils import SQLBuilder, retry_on_connection_error, retry_on_transform_error
 
 
@@ -20,6 +20,7 @@ class ETLService:
         self.config_service = ConfigService()
         self.database_service = DatabaseService()
         self.transform_service = TransformService()
+        self.filter_service = FilterService()
         self.replication_service: Optional[ReplicationService] = None
         self.config: Optional[ETLConfig] = None
         self._shutdown_requested = False
@@ -132,6 +133,16 @@ class ETLService:
                         source_name=event.source_name,
                         target_name=target_name)
         
+        # Apply filters if configured
+        if table_mapping.filter:
+            if not self.filter_service.apply_filter(event.values, table_mapping.filter):
+                self.logger.debug("INSERT event filtered out", 
+                                table=event.table, 
+                                schema=event.schema,
+                                source_name=event.source_name,
+                                filter=table_mapping.filter)
+                return
+        
         # Apply transformations
         transformed_data = self.transform_service.apply_column_transforms(
             event.values, table_mapping.column_mapping
@@ -158,6 +169,31 @@ class ETLService:
                         schema=event.schema,
                         source_name=event.source_name,
                         target_name=target_name)
+        
+        # Apply filters if configured (check both before and after values)
+        if table_mapping.filter:
+            # Check if after_values pass the filter
+            after_passes_filter = self.filter_service.apply_filter(event.after_values, table_mapping.filter)
+            # Check if before_values passed the filter
+            before_passed_filter = self.filter_service.apply_filter(event.before_values, table_mapping.filter)
+            
+            if not after_passes_filter and not before_passed_filter:
+                # Both before and after don't pass filter, skip
+                self.logger.debug("UPDATE event filtered out (both before and after)", 
+                                table=event.table, 
+                                schema=event.schema,
+                                source_name=event.source_name,
+                                filter=table_mapping.filter)
+                return
+            elif not after_passes_filter and before_passed_filter:
+                # Record was previously included but now excluded, delete it
+                self.logger.debug("UPDATE event: record now filtered out, deleting", 
+                                table=event.table, 
+                                schema=event.schema,
+                                source_name=event.source_name,
+                                filter=table_mapping.filter)
+                self._delete_filtered_record(event.before_values, table_mapping, target_name, target_table_name)
+                return
         
         # Apply transformations to after_values
         transformed_data = self.transform_service.apply_column_transforms(
@@ -186,6 +222,16 @@ class ETLService:
                         source_name=event.source_name,
                         target_name=target_name)
         
+        # Apply filters if configured
+        if table_mapping.filter:
+            if not self.filter_service.apply_filter(event.values, table_mapping.filter):
+                self.logger.debug("DELETE event filtered out", 
+                                table=event.table, 
+                                schema=event.schema,
+                                source_name=event.source_name,
+                                filter=table_mapping.filter)
+                return
+        
         # Apply transformations to get primary key
         transformed_data = self.transform_service.apply_column_transforms(
             event.values, table_mapping.column_mapping
@@ -201,6 +247,26 @@ class ETLService:
         self.database_service.execute_update(sql, values, target_name)
         self.logger.info("DELETE processed successfully", 
                         data=event.values, 
+                        transformed=transformed_data,
+                        target_name=target_name)
+    
+    def _delete_filtered_record(self, values: dict, table_mapping, target_name: str, target_table_name: str) -> None:
+        """Delete a record that was previously included but now filtered out"""
+        # Apply transformations to get primary key
+        transformed_data = self.transform_service.apply_column_transforms(
+            values, table_mapping.column_mapping
+        )
+        
+        # Build and execute DELETE
+        sql, values = SQLBuilder.build_delete_sql(
+            target_table_name,
+            transformed_data,
+            table_mapping.primary_key
+        )
+        
+        self.database_service.execute_update(sql, values, target_name)
+        self.logger.info("Filtered record deleted successfully", 
+                        data=values, 
                         transformed=transformed_data,
                         target_name=target_name)
     

@@ -31,3 +31,8 @@ class ReplicationError(ETLException):
 class ValidationError(ETLException):
     """Data validation errors"""
     pass
+
+
+class FilterError(ETLException):
+    """Filter processing errors"""
+    pass

@@ -29,6 +29,7 @@ myrepetl --help
 - **Множественные приемники**: Возможность репликации в несколько целевых баз данных
 - **Гибкие трансформации**: Поддержка пользовательских функций трансформации
 - **Конфигурируемые mapping'и**: Настройка соответствия таблиц и колонок
+- **Фильтрация данных**: Гибкая система фильтрации с поддержкой сложных условий
 - **Мониторинг**: Логирование и отслеживание процесса репликации
 - **Docker поддержка**: Готовые контейнеры для развертывания
 - **Модульная архитектура**: Четкое разделение ответственности между компонентами
@@ -269,6 +270,71 @@ make test-fast
 - `"source2.orders"` → `"target2.orders"` - таблица orders из source2 в target2
 - `"source1.users"` → `"target2.users"` - таблица users из source1 в target2
 
+#### Filter (Фильтрация)
+Секция `filter` позволяет фильтровать данные на основе условий. Поддерживаются следующие операции:
+
+- `eq` - равенство
+- `gt` - больше чем
+- `gte` - больше или равно
+- `lt` - меньше чем
+- `lte` - меньше или равно
+- `not` - отрицание
+- `and` - логическое И
+- `or` - логическое ИЛИ
+
+**Примеры фильтров:**
+
+```json
+{
+  "mapping": {
+    "source1.users": {
+      "target_table": "target1.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"},
+        "status": {"column": "status"},
+        "age": {"column": "age"}
+      },
+      "filter": {
+        "status": {"eq": "active"},
+        "age": {"gte": 18}
+      }
+    }
+  }
+}
+```
+
+**Сложные фильтры:**
+
+```json
+{
+  "filter": {
+    "and": [
+      {"status": {"eq": "active"}},
+      {
+        "or": [
+          {"category": {"eq": "premium"}},
+          {"score": {"gte": 90}}
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Фильтр с отрицанием:**
+
+```json
+{
+  "filter": {
+    "not": {
+      "status": {"eq": "deleted"}
+    }
+  }
+}
+```
+
 ## Трансформации
 
 ### Встроенные трансформации
@@ -366,6 +432,67 @@ def custom_transform(value):
         "id": {"column": "id", "primary_key": true},
         "name": {"column": "name"},
         "email": {"column": "email"}
+      }
+    }
+  }
+}
+```
+
+#### Конфигурация с фильтрацией данных
+
+```json
+{
+  "sources": {
+    "main_source": {
+      "host": "mysql-source",
+      "port": 3306,
+      "user": "root",
+      "password": "rootpassword",
+      "database": "source_db"
+    }
+  },
+  "targets": {
+    "main_target": {
+      "host": "mysql-target",
+      "port": 3306,
+      "user": "target_user",
+      "password": "target_password",
+      "database": "target_db"
+    }
+  },
+  "replication": {
+    "server_id": 100
+  },
+  "mapping": {
+    "main_source.users": {
+      "target_table": "main_target.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"},
+        "email": {"column": "email"},
+        "status": {"column": "status"},
+        "age": {"column": "age"}
+      },
+      "filter": {
+        "status": {"eq": "active"},
+        "age": {"gte": 18}
+      }
+    },
+    "main_source.orders": {
+      "target_table": "main_target.orders",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "user_id": {"column": "user_id"},
+        "amount": {"column": "amount"},
+        "status": {"column": "status"}
+      },
+      "filter": {
+        "and": [
+          {"status": {"eq": "completed"}},
+          {"amount": {"gt": 0}}
+        ]
       }
     }
   }

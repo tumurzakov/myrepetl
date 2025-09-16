@@ -44,6 +44,10 @@
         "email": {"column": "email"},
         "status": {"column": "status"},
         "source_id": {"column": "source_id", "value": "1"}
+      },
+      "filter": {
+        "status": {"eq": "active"},
+        "id": {"gt": 2}
       }
     },
     "source2.users": {
