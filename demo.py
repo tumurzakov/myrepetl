@@ -14,7 +14,7 @@ from pathlib import Path
 # Add parent directory to path to import ETL modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from etl.dsl import (
+from dsl import (
     ETLPipeline,
     ReplicationSource,
     TargetTable,
@@ -24,7 +24,7 @@ from etl.dsl import (
     uppercase_transform,
     lowercase_transform
 )
-from etl.utils import ETLConfigManager, ETLValidator, setup_logging
+from utils import ETLConfigManager, ETLValidator, setup_logging
 
 
 def create_demo_pipeline():

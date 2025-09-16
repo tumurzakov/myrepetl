@@ -55,6 +55,14 @@ class ReplicationSource:
             raise ValueError("Host is required")
         if self.port <= 0 or self.port > 65535:
             raise ValueError("Port must be between 1 and 65535")
+        
+        # Ensure database is a string
+        if self.database is not None and not isinstance(self.database, str):
+            self.database = str(self.database)
+        
+        # Ensure tables is a list of strings
+        if self.tables and isinstance(self.tables, list):
+            self.tables = [str(table) for table in self.tables if table]
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -177,8 +185,31 @@ class FieldMapping:
         return {
             "source_field": self.source_field,
             "target_field": self.target_field,
-            "transformation": self.transformation.__name__ if self.transformation else None
+            "transformation": self.transformation.__name__ if callable(self.transformation) else self.transformation
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'FieldMapping':
+        """Create from dictionary"""
+        transformation_name = data.get("transformation")
+        transformation = None
+        
+        if transformation_name:
+            # Map function names to actual functions
+            function_map = {
+                "uppercase_transform": uppercase_transform,
+                "lowercase_transform": lowercase_transform,
+                "trim_transform": trim_transform,
+                "datetime_transform": datetime_transform,
+                "json_transform": json_transform
+            }
+            transformation = function_map.get(transformation_name)
+        
+        return cls(
+            source_field=data["source_field"],
+            target_field=data["target_field"],
+            transformation=transformation
+        )
 
 
 @dataclass
@@ -228,7 +259,7 @@ class TransformationRule:
     def from_dict(cls, data: Dict[str, Any]) -> 'TransformationRule':
         """Create from dictionary"""
         mappings_data = data.pop("field_mappings", [])
-        mappings = [FieldMapping(**mapping_data) for mapping_data in mappings_data]
+        mappings = [FieldMapping.from_dict(mapping_data) for mapping_data in mappings_data]
         operations_data = data.pop("operations", [])
         operations = [OperationType(op) for op in operations_data]
         return cls(field_mappings=mappings, operations=operations, **data)

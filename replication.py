@@ -74,16 +74,46 @@ class MySQLReplicationClient:
                 'charset': self.source.charset
             }
             
-            # Create binlog stream reader
-            self.stream_reader = BinLogStreamReader(
-                connection_settings=mysql_settings,
-                server_id=self.source.server_id,
-                only_events=[DeleteRowsEvent, UpdateRowsEvent, WriteRowsEvent, QueryEvent],
-                only_tables=self.source.tables if self.source.tables else None,
-                only_schemas=[self.source.database] if self.source.database else None,
-                auto_position=self.source.auto_position,
-                resume_stream=True
-            )
+            # Validate and prepare parameters for BinLogStreamReader
+            only_tables = None
+            if self.source.tables and isinstance(self.source.tables, list) and len(self.source.tables) > 0:
+                # Ensure all table names are strings
+                only_tables = [str(table) for table in self.source.tables if table]
+                self.logger.debug(f"only_tables: {only_tables}")
+            
+            only_schemas = None
+            if self.source.database and isinstance(self.source.database, str) and self.source.database.strip():
+                only_schemas = [self.source.database.strip()]
+                self.logger.debug(f"only_schemas: {only_schemas}")
+            
+            # Log all parameters for debugging
+            self.logger.debug(f"BinLogStreamReader parameters:")
+            self.logger.debug(f"  connection_settings: {mysql_settings}")
+            self.logger.debug(f"  server_id: {self.source.server_id}")
+            self.logger.debug(f"  only_tables: {only_tables}")
+            self.logger.debug(f"  only_schemas: {only_schemas}")
+            self.logger.debug(f"  auto_position: {self.source.auto_position}")
+            self.logger.debug(f"  resume_stream: True")
+            
+            # Create binlog stream reader with minimal parameters first
+            try:
+                self.stream_reader = BinLogStreamReader(
+                    connection_settings=mysql_settings,
+                    server_id=self.source.server_id,
+                    only_events=[DeleteRowsEvent, UpdateRowsEvent, WriteRowsEvent, QueryEvent],
+                    resume_stream=True
+                )
+                self.logger.info("BinLogStreamReader created successfully with basic parameters")
+            except Exception as e:
+                self.logger.error(f"Failed to create BinLogStreamReader with basic parameters: {e}")
+                raise
+            
+            # If we have table/schema filters, we'll need to handle them differently
+            # For now, let's log what we would have used
+            if only_tables:
+                self.logger.info(f"Table filtering would be applied to: {only_tables}")
+            if only_schemas:
+                self.logger.info(f"Schema filtering would be applied to: {only_schemas}")
             
             self.logger.info(f"Connected to MySQL replication stream on {self.source.host}:{self.source.port}")
             return True
@@ -102,6 +132,15 @@ class MySQLReplicationClient:
     def _process_binlog_event(self, binlog_event):
         """Process individual binlog event"""
         try:
+            # Apply manual filtering for tables and schemas
+            if hasattr(binlog_event, 'table') and hasattr(binlog_event, 'schema'):
+                # Check if we should filter this event
+                if self.source.tables and binlog_event.table not in self.source.tables:
+                    return  # Skip this event
+                
+                if self.source.database and binlog_event.schema != self.source.database:
+                    return  # Skip this event
+            
             event_type = None
             rows = []
             

@@ -39,9 +39,23 @@ pip install -r requirements.txt
 GRANT REPLICATION SLAVE ON *.* TO 'replication_user'@'%' IDENTIFIED BY 'password';
 FLUSH PRIVILEGES;
 
--- Включите binlog
+-- Включите binlog с полными метаданными
 SET GLOBAL binlog_format = 'ROW';
 SET GLOBAL log_bin = ON;
+SET GLOBAL binlog_row_metadata = 'FULL';
+SET GLOBAL binlog_row_image = 'FULL';
+```
+
+Или в my.cnf:
+```ini
+[mysqld]
+server-id = 1
+log-bin = mysql-bin
+binlog-format = ROW
+binlog-row-metadata = FULL
+binlog-row-image = FULL
+gtid-mode = ON
+enforce-gtid-consistency = ON
 ```
 
 ## Быстрый старт

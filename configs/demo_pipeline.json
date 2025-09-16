@@ -3,11 +3,11 @@
   "sources": [
     {
       "name": "demo_source",
-      "host": "mysql-source",
+      "host": "localhost",
       "port": 3306,
       "user": "replication_user",
       "password": "replication_password",
-      "database": "source_db",
+      "database": "demo_source_db",
       "tables": [
         "users",
         "orders",
@@ -21,7 +21,7 @@
   "target_tables": [
     {
       "name": "users",
-      "database": "target_db",
+      "database": "demo_target_db",
       "fields": [
         {
           "name": "id",
@@ -75,7 +75,7 @@
     },
     {
       "name": "orders",
-      "database": "target_db",
+      "database": "demo_target_db",
       "fields": [
         {
           "name": "id",
@@ -138,7 +138,7 @@
     },
     {
       "name": "products",
-      "database": "target_db",
+      "database": "demo_target_db",
       "fields": [
         {
           "name": "id",

@@ -1,8 +1,9 @@
 # ETL Tool Dependencies
 
 # MySQL replication
-pymysql==0.8.1
-mysql-replication-watcher==0.25
+pymysql==1.1.2
+cryptography==41.0.7
+mysql-replication==1.0.9
 
 # Data processing
 pandas==2.1.4

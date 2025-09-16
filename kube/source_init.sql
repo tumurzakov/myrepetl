@@ -3,7 +3,7 @@
 
 -- Create replication user
 CREATE USER IF NOT EXISTS 'replication_user'@'%' IDENTIFIED BY 'replication_password';
-GRANT REPLICATION SLAVE ON *.* TO 'replication_user'@'%';
+GRANT REPLICATION SLAVE, SUPER, REPLICATION CLIENT ON *.* TO 'replication_user'@'%';
 GRANT SELECT ON *.* TO 'replication_user'@'%';
 FLUSH PRIVILEGES;
 
