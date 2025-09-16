@@ -3,6 +3,7 @@ Main ETL service for MySQL Replication ETL
 """
 
 from typing import Optional
+import os
 import structlog
 
 from .exceptions import ETLException
@@ -42,8 +43,9 @@ class ETLService:
             if not self.config_service.validate_config(self.config):
                 raise ETLException("Invalid configuration")
             
-            # Load transform module
-            self.transform_service.load_transform_module()
+            # Load transform module from config directory
+            config_dir = os.path.dirname(os.path.abspath(config_path))
+            self.transform_service.load_transform_module(config_dir=config_dir)
             
             # Initialize replication service
             self.replication_service = ReplicationService(self.database_service)

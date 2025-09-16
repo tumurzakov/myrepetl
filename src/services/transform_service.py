@@ -20,7 +20,7 @@ class TransformService:
         self._transform_functions: Dict[str, TransformFunction] = {}
         self._register_default_transforms()
     
-    def load_transform_module(self, module_name: str = "transform") -> None:
+    def load_transform_module(self, module_name: str = "transform", config_dir: str = None) -> None:
         """Load transform module dynamically"""
         try:
             # Try to import as module first
@@ -41,7 +41,20 @@ class TransformService:
                     else:
                         raise TransformError(f"Could not load module from file: {module_name}")
                 else:
-                    raise TransformError(f"Failed to import transform module '{module_name}': No module named '{module_name}'")
+                    # Try to find transform.py in config directory
+                    if config_dir:
+                        transform_path = os.path.join(config_dir, f"{module_name}.py")
+                        if os.path.exists(transform_path):
+                            spec = importlib.util.spec_from_file_location("transform", transform_path)
+                            if spec and spec.loader:
+                                self._transform_module = importlib.util.module_from_spec(spec)
+                                spec.loader.exec_module(self._transform_module)
+                            else:
+                                raise TransformError(f"Could not load module from file: {transform_path}")
+                        else:
+                            raise TransformError(f"Failed to import transform module '{module_name}': No module named '{module_name}' and no {module_name}.py found in {config_dir}")
+                    else:
+                        raise TransformError(f"Failed to import transform module '{module_name}': No module named '{module_name}'")
             except Exception as e:
                 raise TransformError(f"Failed to import transform module '{module_name}': {e}")
         except Exception as e:
