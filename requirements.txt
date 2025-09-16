@@ -2,17 +2,11 @@
 
 # MySQL replication
 pymysql==1.1.2
-cryptography==41.0.7
-mysql-replication==1.0.9
-
-# Data processing
-pandas==2.1.4
-numpy==1.24.3
+#mysql-replication==1.0.9
+mysql-replication==0.46
 
 # Configuration and utilities
 pyyaml==6.0.1
-python-dotenv==1.0.0
-click==8.1.7
 
 # Logging and monitoring
 structlog==23.2.0
