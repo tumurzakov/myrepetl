@@ -1,6 +1,26 @@
 # MyRepETL
 
+[![PyPI version](https://badge.fury.io/py/myrepetl.svg)](https://badge.fury.io/py/myrepetl)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 MySQL Replication ETL Tool - инструмент для репликации данных из MySQL с поддержкой трансформаций.
+
+## Установка
+
+### Быстрая установка
+
+```bash
+pip install git+https://github.com/tumurzakov/myrepetl.git
+```
+
+### Проверка установки
+
+```bash
+myrepetl --help
+```
+
+Подробные инструкции по установке см. в [INSTALL.md](INSTALL.md).
 
 ## Возможности
 
@@ -40,24 +60,46 @@ src/
 
 ## Быстрый старт
 
-### 1. Клонирование репозитория
+### 1. Установка через pip
 
 ```bash
-git clone <repository-url>
-cd myrepetl
+# Установка из GitHub
+pip install git+https://github.com/tumurzakov/myrepetl.git
+
+# Или для разработки
+pip install -e git+https://github.com/tumurzakov/myrepetl.git#egg=myrepetl
 ```
 
-### 2. Установка зависимостей
+### 2. Альтернативная установка (для разработки)
 
 ```bash
-# Установка Python зависимостей
-make install
+# Клонирование репозитория
+git clone https://github.com/tumurzakov/myrepetl.git
+cd myrepetl
 
-# Или вручную
+# Установка в режиме разработки
+pip install -e .
+
+# Или установка зависимостей вручную
 pip install -r requirements.txt
 ```
 
-### 3. Запуск с Docker Compose
+### 3. Использование после установки
+
+После установки пакета команда `myrepetl` будет доступна в системе:
+
+```bash
+# Запуск репликации
+myrepetl run config.json
+
+# Тестирование подключения
+myrepetl test config.json
+
+# Справка
+myrepetl --help
+```
+
+### 4. Запуск с Docker Compose
 
 ```bash
 # Сборка и запуск всех сервисов
@@ -74,7 +116,7 @@ make test-connection
 make run-replication
 ```
 
-### 4. Локальная разработка
+### 5. Локальная разработка
 
 ```bash
 # Тестирование подключения

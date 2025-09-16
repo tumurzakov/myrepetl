@@ -128,62 +128,19 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Docker
-.dockerignore
-
-# IDE
+# Project specific
+logs/
+*.log
+.DS_Store
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Docker
+.dockerignore
 
-# Project specific - монтируемые папки из docker-compose
-# Эти папки содержат рабочие данные и не должны попадать в git
-notebooks/
-outputs/
-examples/
-app/data/
-
-# Но оставляем примеры в git, исключаем только временные файлы
-!examples/*.ipynb
-!examples/README.md
-
-# Временные файлы в рабочих папках
-notebooks/**/*.ipynb_checkpoints/
-notebooks/**/__pycache__/
-outputs/**/*.tmp
-outputs/**/*.log
-outputs/**/temp/
-
-# База данных
-*.db
-*.sqlite
-*.sqlite3
-
-# Логи
-*.log
-logs/
-
-# Конфигурационные файлы с секретами
-config.ini
-secrets.json
-.secrets
-
-# Alembic
-alembic/versions/*.py
-!alembic/versions/.gitkeep
-
-# Временные файлы приложения
-temp/
+# Temporary files
 tmp/
-cache/
+temp/

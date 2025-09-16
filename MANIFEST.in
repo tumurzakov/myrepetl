@@ -1,0 +1,13 @@
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+recursive-include configs *.json
+recursive-include kube *.sql
+recursive-include examples *.py
+recursive-include tests *.py
+include pytest.ini
+include Makefile
+include docker-compose.yml
+include docker-compose.monitoring.yaml
+include Dockerfile
