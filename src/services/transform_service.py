@@ -3,6 +3,7 @@ Transform service for MySQL Replication ETL
 """
 
 import importlib
+import importlib.util
 from typing import Dict, Any, Optional, Callable
 from functools import lru_cache
 
@@ -22,9 +23,27 @@ class TransformService:
     def load_transform_module(self, module_name: str = "transform") -> None:
         """Load transform module dynamically"""
         try:
+            # Try to import as module first
             self._transform_module = importlib.import_module(module_name)
-        except ImportError as e:
-            raise TransformError(f"Failed to import transform module '{module_name}': {e}")
+        except ImportError:
+            # If module import fails, try to load as file path
+            try:
+                import sys
+                import os
+                
+                # Check if it's a file path
+                if os.path.exists(module_name) and module_name.endswith('.py'):
+                    # Load module from file path
+                    spec = importlib.util.spec_from_file_location("transform", module_name)
+                    if spec and spec.loader:
+                        self._transform_module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(self._transform_module)
+                    else:
+                        raise TransformError(f"Could not load module from file: {module_name}")
+                else:
+                    raise TransformError(f"Failed to import transform module '{module_name}': No module named '{module_name}'")
+            except Exception as e:
+                raise TransformError(f"Failed to import transform module '{module_name}': {e}")
         except Exception as e:
             raise TransformError(f"Unexpected error loading transform module: {e}")
     
