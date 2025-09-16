@@ -26,6 +26,30 @@ services:
     networks:
       - etl-network
 
+  mysql-other:
+    image: mysql:8.0
+    container_name: etl-mysql-source
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: source_db
+      MYSQL_USER: source_user
+      MYSQL_PASSWORD: source_password
+    volumes:
+      - mysql_other_data:/var/lib/mysql
+      - ./kube/source_init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: >
+      --server-id=2
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-metadata=FULL
+      --binlog-row-image=FULL
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+    ports:
+      - "3308:3306"
+    networks:
+      - etl-network
+
   # Target MySQL database
   mysql-target:
     image: mysql:8.0
@@ -59,14 +83,10 @@ services:
     networks:
       - etl-network
     command: >
-      python cli.py run demo_pipeline.json
-      --target-host mysql-target
-      --target-port 3306
-      --target-user target_user
-      --target-password target_password
-      --target-database target_db
+      python cli.py run configs/demo_pipeline.json
       --monitor
       --monitor-interval 30
+      --log-level DEBUG
     restart: unless-stopped
 
   # MySQL Admin (phpMyAdmin)
@@ -88,6 +108,7 @@ services:
 
 volumes:
   mysql_source_data:
+  mysql_other_data:
   mysql_target_data:
 
 networks:

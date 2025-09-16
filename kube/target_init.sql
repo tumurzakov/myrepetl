@@ -1,6 +1,10 @@
 -- ETL Tool - Target Database Initialization Script
 -- This script sets up the target database with the required tables
 
+CREATE USER IF NOT EXISTS 'target_user'@'%' IDENTIFIED BY 'target_password';
+GRANT ALL PRIVILEGES ON *.* TO 'target_user'@'%';
+FLUSH PRIVILEGES;
+
 -- Create target database (already created by environment variables, but ensure it exists)
 CREATE DATABASE IF NOT EXISTS target_db;
 USE target_db;
@@ -11,7 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(255),
     email VARCHAR(255),
     status VARCHAR(50),
-    created_at DATETIME
+    created_at DATETIME,
+    source_id INT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Orders table

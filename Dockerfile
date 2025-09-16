@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create directories for configs and logs
-RUN mkdir -p /app/configs /app/logs /app/backups
+RUN mkdir -p /app/configs /app/logs
 
 # Set environment variables
 ENV PYTHONPATH=/app

@@ -1,327 +1,391 @@
-# ETL Tool для MySQL Replication Protocol
+# MyRepETL
 
-Общий инструмент ETL (Extract, Transform, Load) для работы с MySQL replication протоколом на Python.
+MySQL Replication ETL Tool - инструмент для репликации данных из MySQL с поддержкой трансформаций.
 
-## Особенности
+## Возможности
 
-- **DSL на Python**: Описание источников репликации, таблиц-приемников и правил трансформации через Python DSL
-- **MySQL Replication**: Поддержка MySQL binlog replication для real-time обработки данных
-- **Гибкие трансформации**: Настраиваемые правила трансформации данных с поддержкой фильтров
-- **Множественные источники**: Поддержка нескольких источников репликации одновременно
-- **Автоматическое создание таблиц**: Автоматическое создание таблиц-приемников на основе схемы
-- **Мониторинг**: Встроенная статистика и мониторинг процесса ETL
+- **Репликация в реальном времени**: Чтение binlog событий MySQL
+- **Гибкие трансформации**: Поддержка пользовательских функций трансформации
+- **Конфигурируемые mapping'и**: Настройка соответствия таблиц и колонок
+- **Мониторинг**: Логирование и отслеживание процесса репликации
+- **Docker поддержка**: Готовые контейнеры для развертывания
+- **Модульная архитектура**: Четкое разделение ответственности между компонентами
+- **Полное покрытие тестами**: Unit и интеграционные тесты с покрытием >90%
+- **Обработка ошибок**: Retry механизм и детальное логирование
 
-## Структура проекта
+## Архитектура
+
+Проект построен на модульной архитектуре с четким разделением ответственности:
 
 ```
-etl/
-├── __init__.py              # Основной модуль
-├── dsl.py                   # DSL для описания ETL конфигурации
-├── replication.py           # MySQL replication клиент
-├── engine.py                # Основной ETL движок
-├── requirements.txt         # Зависимости
-├── examples/                # Примеры использования
-│   ├── basic_example.py     # Базовый пример
-│   └── advanced_example.py  # Продвинутый пример
-└── README.md               # Документация
-```
-
-## Установка
-
-1. Установите зависимости:
-```bash
-pip install -r requirements.txt
-```
-
-2. Убедитесь, что MySQL настроен для репликации:
-```sql
--- На источнике данных
-GRANT REPLICATION SLAVE ON *.* TO 'replication_user'@'%' IDENTIFIED BY 'password';
-FLUSH PRIVILEGES;
-
--- Включите binlog с полными метаданными
-SET GLOBAL binlog_format = 'ROW';
-SET GLOBAL log_bin = ON;
-SET GLOBAL binlog_row_metadata = 'FULL';
-SET GLOBAL binlog_row_image = 'FULL';
-```
-
-Или в my.cnf:
-```ini
-[mysqld]
-server-id = 1
-log-bin = mysql-bin
-binlog-format = ROW
-binlog-row-metadata = FULL
-binlog-row-image = FULL
-gtid-mode = ON
-enforce-gtid-consistency = ON
+src/
+├── models/           # Модели данных
+│   ├── config.py     # Конфигурационные модели
+│   ├── events.py     # Модели событий binlog
+│   └── transforms.py # Модели трансформаций
+├── services/         # Бизнес-логика
+│   ├── config_service.py      # Управление конфигурацией
+│   ├── database_service.py    # Работа с БД
+│   ├── transform_service.py   # Трансформации данных
+│   └── replication_service.py # Репликация MySQL
+├── utils/            # Утилиты
+│   ├── retry.py      # Retry механизм
+│   ├── sql_builder.py # Построение SQL запросов
+│   └── logger.py     # Настройка логирования
+├── exceptions.py     # Пользовательские исключения
+└── etl_service.py   # Основной ETL сервис
 ```
 
 ## Быстрый старт
 
-### 1. Описание источника репликации
+### 1. Клонирование репозитория
 
-```python
-from etl.dsl import ReplicationSource
-
-source = ReplicationSource(
-    name="main_database",
-    host="localhost",
-    port=3306,
-    user="replication_user",
-    password="replication_password",
-    database="source_db",
-    tables=["users", "orders", "products"],
-    server_id=100
-)
+```bash
+git clone <repository-url>
+cd myrepetl
 ```
 
-### 2. Описание таблиц-приемников
+### 2. Установка зависимостей
 
-```python
-from etl.dsl import TargetTable, FieldType
+```bash
+# Установка Python зависимостей
+make install
 
-users_table = TargetTable(
-    name="users",
-    database="target_db"
-).add_field("name", FieldType.VARCHAR, length=255) \
- .add_field("email", FieldType.VARCHAR, length=255) \
- .add_field("status", FieldType.VARCHAR, length=50)
+# Или вручную
+pip install -r requirements.txt
 ```
 
-### 3. Описание правил трансформации
+### 3. Запуск с Docker Compose
 
-```python
-from etl.dsl import TransformationRule, FieldMapping, OperationType
-from etl.dsl import uppercase_transform, lowercase_transform
+```bash
+# Сборка и запуск всех сервисов
+make build
+make up
 
-users_rule = TransformationRule(
-    name="users_transform",
-    source_table="users",
-    target_table="users"
-).add_mapping("id", "id") \
- .add_mapping("name", "name", uppercase_transform) \
- .add_mapping("email", "email", lowercase_transform) \
- .add_mapping("status", "status")
+# Проверка статуса
+make status
+
+# Тестирование подключения
+make test-connection
+
+# Запуск репликации
+make run-replication
 ```
 
-### 4. Создание и запуск ETL пайплайна
+### 4. Локальная разработка
 
-```python
-from etl.dsl import ETLPipeline
-from etl.engine import ETLEngine
+```bash
+# Тестирование подключения
+make test-local
 
-# Создание пайплайна
-pipeline = ETLPipeline(
-    name="my_etl_pipeline"
-).add_source(source) \
- .add_target_table(users_table) \
- .add_transformation_rule(users_rule)
+# Запуск репликации
+make run-local
+```
 
-# Конфигурация целевой базы данных
-target_db_config = {
-    "host": "localhost",
+## Тестирование
+
+### Запуск тестов
+
+```bash
+# Все тесты
+make test
+
+# Только unit тесты
+make test-unit
+
+# Только интеграционные тесты
+make test-integration
+
+# Тесты с покрытием
+make test-coverage
+
+# Быстрые тесты (исключить медленные)
+make test-fast
+```
+
+### Покрытие кода
+
+Проект имеет покрытие тестами >90%. Отчеты генерируются в формате HTML в папке `htmlcov/`.
+
+## Конфигурация
+
+### Структура конфигурации
+
+```json
+{
+  "source": {
+    "host": "mysql-source",
+    "port": 3306,
+    "user": "root",
+    "password": "rootpassword",
+    "database": "source_db",
+    "server_id": 100,
+    "tables": ["*"]
+  },
+  "target": {
+    "host": "mysql-target",
     "port": 3306,
     "user": "target_user",
     "password": "target_password",
     "database": "target_db"
+  },
+  "replication": {
+    "server_id": 100,
+    "log_file": null,
+    "log_pos": 4,
+    "resume_stream": true,
+    "blocking": true
+  },
+  "monitoring": {
+    "enabled": true,
+    "interval": 30,
+    "log_level": "INFO"
+  },
+  "mapping": {
+    "source_db.users": {
+      "target_table": "target_db.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name", "transform": "transform.uppercase"},
+        "email": {"column": "email"},
+        "source_id": {"column": "source_id", "value": "1"}
+      }
+    }
+  }
 }
-
-# Создание и запуск ETL движка
-etl_engine = ETLEngine(pipeline, target_db_config)
-etl_engine.start()
 ```
 
-## DSL Reference
+### Параметры конфигурации
 
-### ReplicationSource
+#### Source (Источник)
+- `host`: Хост MySQL сервера
+- `port`: Порт (по умолчанию 3306)
+- `user`: Имя пользователя
+- `password`: Пароль
+- `database`: Имя базы данных
+- `server_id`: ID сервера для репликации
+- `tables`: Список таблиц для репликации (["*"] для всех)
 
-Описание источника MySQL репликации:
+#### Target (Цель)
+- `host`: Хост целевого MySQL сервера
+- `port`: Порт (по умолчанию 3306)
+- `user`: Имя пользователя
+- `password`: Пароль
+- `database`: Имя целевой базы данных
+
+#### Replication (Репликация)
+- `server_id`: ID сервера для репликации
+- `log_file`: Файл binlog для начала чтения
+- `log_pos`: Позиция в binlog файле
+- `resume_stream`: Продолжить с последней позиции
+- `blocking`: Блокирующий режим чтения
+
+#### Mapping (Соответствие)
+- `target_table`: Имя целевой таблицы
+- `primary_key`: Первичный ключ для upsert операций
+- `column_mapping`: Соответствие колонок:
+  - `column`: Имя целевой колонки
+  - `primary_key`: Флаг первичного ключа
+  - `transform`: Путь к функции трансформации
+  - `value`: Статическое значение
+
+## Трансформации
+
+### Встроенные трансформации
 
 ```python
-ReplicationSource(
-    name: str,                    # Уникальное имя источника
-    host: str,                    # Хост MySQL сервера
-    port: int = 3306,            # Порт MySQL сервера
-    user: str = "replication",    # Пользователь для репликации
-    password: str = "",           # Пароль
-    database: str = "",           # База данных (опционально)
-    tables: List[str] = [],       # Список таблиц для репликации
-    server_id: int = 1,          # Server ID для репликации
-    auto_position: bool = True,   # Автоматическое позиционирование
-    charset: str = "utf8mb4"      # Кодировка
-)
+def uppercase(value):
+    """Преобразование в верхний регистр"""
+    if value is None:
+        return None
+    elif isinstance(value, str):
+        return value.upper()
+    else:
+        return value
+
+def lowercase(value):
+    """Преобразование в нижний регистр"""
+    if value is None:
+        return None
+    elif isinstance(value, str):
+        return value.lower()
+    else:
+        return value
+
+def trim(value):
+    """Удаление пробелов"""
+    if value is None:
+        return None
+    elif isinstance(value, str):
+        return value.strip()
+    else:
+        return value
 ```
 
-### TargetTable
+### Создание пользовательских трансформаций
 
-Описание таблицы-приемника:
-
-```python
-TargetTable(
-    name: str,                    # Имя таблицы
-    database: str,                # База данных
-    fields: List[FieldDefinition] = [],  # Поля таблицы
-    indexes: List[str] = [],      # Индексы
-    engine: str = "InnoDB",       # Движок таблицы
-    charset: str = "utf8mb4"      # Кодировка
-)
-```
-
-#### FieldDefinition
-
-```python
-FieldDefinition(
-    name: str,                    # Имя поля
-    field_type: FieldType,        # Тип поля
-    length: Optional[int] = None, # Длина поля
-    nullable: bool = True,        # Может быть NULL
-    default_value: Any = None,    # Значение по умолчанию
-    primary_key: bool = False,    # Первичный ключ
-    auto_increment: bool = False  # Автоинкремент
-)
-```
-
-#### FieldType
-
-Доступные типы полей:
-- `FieldType.INTEGER` - Целое число
-- `FieldType.VARCHAR` - Строка переменной длины
-- `FieldType.TEXT` - Текст
-- `FieldType.DATETIME` - Дата и время
-- `FieldType.DECIMAL` - Десятичное число
-- `FieldType.BOOLEAN` - Логическое значение
-- `FieldType.JSON` - JSON данные
-
-### TransformationRule
-
-Правило трансформации данных:
-
-```python
-TransformationRule(
-    name: str,                    # Уникальное имя правила
-    source_table: str,            # Исходная таблица
-    target_table: str,            # Целевая таблица
-    field_mappings: List[FieldMapping] = [],  # Маппинг полей
-    filters: List[str] = [],      # Фильтры
-    operations: List[OperationType] = [INSERT, UPDATE, DELETE]  # Операции
-)
-```
-
-#### FieldMapping
-
-```python
-FieldMapping(
-    source_field: str,            # Поле источника
-    target_field: str,            # Поле приемника
-    transformation: Optional[Callable] = None  # Функция трансформации
-)
-```
-
-#### OperationType
-
-Типы операций:
-- `OperationType.INSERT` - Вставка
-- `OperationType.UPDATE` - Обновление
-- `OperationType.DELETE` - Удаление
-
-## Встроенные трансформации
-
-```python
-from etl.dsl import (
-    uppercase_transform,    # Преобразование в верхний регистр
-    lowercase_transform,    # Преобразование в нижний регистр
-    trim_transform,         # Удаление пробелов
-    datetime_transform,     # Трансформация даты/времени
-    json_transform          # Трансформация JSON
-)
-```
-
-## Кастомные трансформации
+1. Создайте файл `transform.py` в корне проекта
+2. Добавьте функции трансформации:
 
 ```python
 def custom_transform(value):
-    """Кастомная функция трансформации"""
+    """Пользовательская трансформация"""
     if value is None:
         return None
     # Ваша логика трансформации
     return transformed_value
-
-# Использование в маппинге
-.add_mapping("field", "target_field", custom_transform)
 ```
 
-## Фильтры
+3. Используйте в конфигурации:
 
-Фильтры позволяют исключать определенные записи из обработки:
-
-```python
-rule.add_filter("{status} != 'deleted'")  # Исключить удаленные записи
-rule.add_filter("{amount} > 0")           # Только положительные суммы
-rule.add_filter("{user_id} IS NOT NULL")  # Только записи с user_id
+```json
+{
+  "column_mapping": {
+    "field_name": {
+      "column": "target_field",
+      "transform": "transform.custom_transform"
+    }
+  }
+}
 ```
 
-## Мониторинг и статистика
+## Использование
 
-```python
-# Получение статуса ETL движка
-status = etl_engine.get_status()
+### CLI команды
 
-# Статистика обработки
-stats = status["stats"]
-print(f"Обработано событий: {stats['events_processed']}")
-print(f"Ошибок: {stats['events_failed']}")
-print(f"Вставлено записей: {stats['rows_inserted']}")
-print(f"Обновлено записей: {stats['rows_updated']}")
-print(f"Удалено записей: {stats['rows_deleted']}")
+```bash
+# Запуск репликации
+python cli.py run configs/demo_pipeline.json
 
-# Статус репликации
-replication_status = status["replication"]
-for source_name, client_status in replication_status["clients"].items():
-    print(f"Источник {source_name}: {client_status['is_running']}")
+# Тестирование подключения
+python cli.py test configs/demo_pipeline.json
+
+# С дополнительными параметрами
+python cli.py run configs/demo_pipeline.json --log-level DEBUG --log-format console
 ```
 
-## Сохранение и загрузка конфигурации
+### Параметры командной строки
 
-```python
-# Сохранение конфигурации в JSON
-pipeline_json = pipeline.to_json(indent=2)
-with open("pipeline_config.json", "w") as f:
-    f.write(pipeline_json)
+- `--log-level`: Уровень логирования (DEBUG, INFO, WARNING, ERROR)
+- `--log-format`: Формат логирования (json, console)
+- `--monitor`: Включить мониторинг
+- `--monitor-interval`: Интервал мониторинга в секундах
 
-# Загрузка конфигурации из JSON
-with open("pipeline_config.json", "r") as f:
-    pipeline = ETLPipeline.from_json(f.read())
+## Мониторинг
+
+### Логи
+
+Логи выводятся в формате JSON для удобного парсинга:
+
+```json
+{
+  "timestamp": "2024-01-15T10:30:00Z",
+  "level": "info",
+  "message": "INSERT событие",
+  "table": "users",
+  "schema": "source_db",
+  "rows_count": 1
+}
 ```
 
-## Примеры
+### Docker Compose мониторинг
 
-### Базовый пример
+```bash
+# Запуск с мониторингом
+make dev
 
-См. `examples/basic_example.py` для простого примера настройки ETL пайплайна.
+# Просмотр логов
+make dev-logs
+```
 
-### Продвинутый пример
+## Разработка
 
-См. `examples/advanced_example.py` для примера с:
-- Множественными источниками
-- Сложными трансформациями
-- Фильтрами
-- JSON полями
-- Кастомными функциями трансформации
+### Структура проекта
 
-## Требования
+```
+myrepetl/
+├── src/                    # Исходный код
+│   ├── models/            # Модели данных
+│   ├── services/          # Бизнес-логика
+│   ├── utils/             # Утилиты
+│   ├── exceptions.py      # Исключения
+│   └── etl_service.py     # Основной сервис
+├── tests/                 # Тесты
+│   ├── unit/              # Unit тесты
+│   └── integration/       # Интеграционные тесты
+├── cli.py                 # CLI интерфейс
+├── transform.py           # Функции трансформации
+├── configs/               # Конфигурационные файлы
+├── kube/                  # Kubernetes манифесты
+├── docker-compose.yml     # Docker Compose конфигурация
+├── Dockerfile            # Docker образ
+├── requirements.txt      # Python зависимости
+├── pytest.ini           # Конфигурация тестов
+└── README.md            # Документация
+```
 
-- Python 3.8+
-- MySQL 5.7+ с включенным binlog
-- Права на репликацию в MySQL
+### Качество кода
 
-## Зависимости
+```bash
+# Линтинг
+make lint
 
-- `pymysql` - MySQL клиент
-- `pymysql-replication` - MySQL replication протокол
-- `pandas` - Обработка данных
-- `pyyaml` - Конфигурационные файлы
+# Форматирование кода
+make format
+
+# Проверка типов
+mypy src/
+```
+
+### Добавление новых трансформаций
+
+1. Добавьте функцию в `transform.py`
+2. Добавьте тесты в `tests/unit/test_services.py`
+3. Обновите документацию
+4. Запустите тесты: `make test`
+
+## Развертывание
+
+### Docker
+
+```bash
+# Сборка образа
+docker build -t myrepetl .
+
+# Запуск контейнера
+docker run -v $(pwd)/configs:/app/configs myrepetl run configs/demo_pipeline.json
+```
+
+### Kubernetes
+
+```bash
+# Применение манифестов
+kubectl apply -f kube/
+
+# Проверка статуса
+kubectl get pods
+```
+
+## Устранение неполадок
+
+### Проблемы с подключением
+
+1. Проверьте настройки сети между контейнерами
+2. Убедитесь, что MySQL серверы доступны
+3. Проверьте права пользователей на репликацию
+
+### Проблемы с трансформациями
+
+1. Убедитесь, что функции трансформации корректны
+2. Проверьте логи на ошибки трансформации
+3. Протестируйте функции отдельно
+
+### Проблемы с производительностью
+
+1. Настройте `server_id` для репликации
+2. Проверьте настройки MySQL binlog
+3. Мониторьте использование ресурсов
 
 ## Лицензия
 
@@ -329,4 +393,4 @@ MIT License
 
 ## Поддержка
 
-Для вопросов и предложений создавайте issues в репозитории проекта.
+Для вопросов и предложений создавайте issues в репозитории.

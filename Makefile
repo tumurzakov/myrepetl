@@ -1,82 +1,86 @@
-# ETL Tool Makefile
+# MyRepETL Makefile
 
-.PHONY: help install test lint format clean run-example run-advanced-example create-sample-config
+.PHONY: help build up down logs test clean install
 
-help: ## Show this help message
-	@echo "ETL Tool - Available commands:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+# Default target
+help: ## Показать справку по командам
+	@echo "Доступные команды:"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install dependencies
+build: ## Собрать Docker образы
+	docker-compose build
+
+up: ## Запустить все сервисы
+	docker-compose up -d
+
+down: ## Остановить все сервисы
+	docker-compose down
+
+logs: ## Показать логи ETL инструмента
+	docker-compose logs -f etl-tool
+
+logs-all: ## Показать логи всех сервисов
+	docker-compose logs -f
+
+test-connection: ## Тестировать подключение к MySQL
+	docker-compose exec etl-tool python cli.py test configs/demo_pipeline.json
+
+run-replication: ## Запустить репликацию
+	docker-compose exec etl-tool python cli.py run configs/demo_pipeline.json --log-level DEBUG
+
+install: ## Установить зависимости Python
 	pip install -r requirements.txt
 
-install-dev: ## Install development dependencies
-	pip install -r requirements.txt
-	pip install pytest pytest-cov black flake8 mypy
+test-local: ## Тестировать подключение локально
+	python cli.py test configs/demo_pipeline.json
 
-test: ## Run tests
+run-local: ## Запустить репликацию локально
+	python cli.py run configs/demo_pipeline.json --log-level DEBUG
+
+test: ## Запустить все тесты
 	python -m pytest tests/ -v
 
-test-coverage: ## Run tests with coverage
-	python -m pytest tests/ -v --cov=etl --cov-report=html --cov-report=term
+test-unit: ## Запустить только unit тесты
+	python -m pytest tests/unit/ -v -m unit
 
-lint: ## Run linting
-	flake8 etl/ tests/ examples/
-	mypy etl/
+test-integration: ## Запустить только интеграционные тесты
+	python -m pytest tests/integration/ -v -m integration
 
-format: ## Format code
-	black etl/ tests/ examples/
+test-coverage: ## Запустить тесты с отчетом покрытия
+	python -m pytest tests/ -v --cov=src --cov-report=html --cov-report=term-missing
 
-clean: ## Clean up temporary files
-	find . -type f -name "*.pyc" -delete
-	find . -type d -name "__pycache__" -delete
-	find . -type d -name "*.egg-info" -exec rm -rf {} +
-	rm -rf build/ dist/ .coverage htmlcov/ .pytest_cache/
+test-fast: ## Запустить быстрые тесты (исключить медленные)
+	python -m pytest tests/ -v -m "not slow"
 
-create-sample-config: ## Create sample configuration
-	python examples/sample_config.py
+lint: ## Запустить линтеры
+	flake8 src/ tests/
+	black --check src/ tests/
+	mypy src/
 
-run-example: ## Run basic example
-	python examples/basic_example.py
+format: ## Форматировать код
+	black src/ tests/
 
-run-advanced-example: ## Run advanced example
-	python examples/advanced_example.py
+clean: ## Очистить Docker ресурсы
+	docker-compose down -v
+	docker system prune -f
 
-validate-config: ## Validate sample configuration
-	python -m etl.cli validate configs/sample_pipeline.json
+reset: clean build up ## Полный сброс (очистка + пересборка + запуск)
 
-list-configs: ## List available configurations
-	python -m etl.cli list
+# Мониторинг
+status: ## Показать статус сервисов
+	docker-compose ps
 
-backup-config: ## Create backup of sample configuration
-	python -m etl.cli backup configs/sample_pipeline.json
+# База данных
+db-source: ## Подключиться к исходной БД
+	docker-compose exec mysql-source mysql -u root -prootpassword
 
-docker-build: ## Build Docker image
-	docker build -t etl-tool .
+db-target: ## Подключиться к целевой БД
+	docker-compose exec mysql-target mysql -u root -prootpassword
 
-docker-run: ## Run ETL tool in Docker
-	docker run -it --rm etl-tool
+# Разработка
+dev: ## Запуск в режиме разработки
+	docker-compose -f docker-compose.yml -f docker-compose.monitoring.yaml up -d
 
-docs: ## Generate documentation
-	@echo "Documentation is available in README.md"
+dev-logs: ## Логи в режиме разработки
+	docker-compose -f docker-compose.yml -f docker-compose.monitoring.yaml logs -f
 
-setup-mysql: ## Setup MySQL for replication (requires sudo)
-	@echo "Setting up MySQL for replication..."
-	@echo "Please run the following SQL commands on your MySQL server:"
-	@echo "GRANT REPLICATION SLAVE ON *.* TO 'replication_user'@'%' IDENTIFIED BY 'password';"
-	@echo "FLUSH PRIVILEGES;"
-	@echo "SET GLOBAL binlog_format = 'ROW';"
-	@echo "SET GLOBAL log_bin = ON;"
-
-check-deps: ## Check if all dependencies are installed
-	python -c "import pymysql, pymysqlreplication, pandas, yaml; print('All dependencies are installed')"
-
-version: ## Show version information
-	python -c "import etl; print(f'ETL Tool version: {etl.__version__}')"
-
-# Development targets
-dev-setup: install-dev create-sample-config ## Setup development environment
-	@echo "Development environment setup complete!"
-
-ci: lint test ## Run CI pipeline (lint + test)
-
-all: clean install-dev test lint format ## Run all checks and tests
