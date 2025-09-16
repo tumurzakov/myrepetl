@@ -22,10 +22,22 @@ class TransformService:
     
     def load_transform_module(self, module_name: str = "transform", config_dir: str = None) -> None:
         """Load transform module dynamically"""
+        import structlog
+        logger = structlog.get_logger()
+        
+        logger.debug("Starting transform module loading", 
+                    module_name=module_name, 
+                    config_dir=config_dir)
+        
         try:
             # Try to import as module first
+            logger.debug("Attempting to import as Python module", module_name=module_name)
             self._transform_module = importlib.import_module(module_name)
-        except ImportError:
+            logger.debug("Successfully imported as Python module", module_name=module_name)
+        except ImportError as e:
+            logger.debug("Failed to import as Python module, trying file path", 
+                        module_name=module_name, 
+                        error=str(e))
             # If module import fails, try to load as file path
             try:
                 import sys
@@ -33,31 +45,64 @@ class TransformService:
                 
                 # Check if it's a file path
                 if os.path.exists(module_name) and module_name.endswith('.py'):
+                    logger.debug("Loading module from file path", file_path=module_name)
                     # Load module from file path
                     spec = importlib.util.spec_from_file_location("transform", module_name)
                     if spec and spec.loader:
                         self._transform_module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(self._transform_module)
+                        logger.debug("Successfully loaded module from file path", file_path=module_name)
                     else:
                         raise TransformError(f"Could not load module from file: {module_name}")
                 else:
                     # Try to find transform.py in config directory
                     if config_dir:
+                        logger.debug("Searching for transform file in config directory", 
+                                   config_dir=config_dir, 
+                                   module_name=module_name)
+                        
+                        # List files in config directory for debugging
+                        try:
+                            files_in_dir = os.listdir(config_dir)
+                            logger.debug("Files in config directory", 
+                                       config_dir=config_dir, 
+                                       files=files_in_dir)
+                        except Exception as list_error:
+                            logger.debug("Could not list files in config directory", 
+                                       config_dir=config_dir, 
+                                       error=str(list_error))
+                        
                         transform_path = os.path.join(config_dir, f"{module_name}.py")
+                        logger.debug("Looking for transform file", 
+                                   transform_path=transform_path, 
+                                   exists=os.path.exists(transform_path))
+                        
                         if os.path.exists(transform_path):
+                            logger.debug("Found transform file, loading", transform_path=transform_path)
                             spec = importlib.util.spec_from_file_location("transform", transform_path)
                             if spec and spec.loader:
                                 self._transform_module = importlib.util.module_from_spec(spec)
                                 spec.loader.exec_module(self._transform_module)
+                                logger.debug("Successfully loaded transform module from config directory", 
+                                           transform_path=transform_path)
                             else:
                                 raise TransformError(f"Could not load module from file: {transform_path}")
                         else:
                             raise TransformError(f"Failed to import transform module '{module_name}': No module named '{module_name}' and no {module_name}.py found in {config_dir}")
                     else:
+                        logger.debug("No config directory provided")
                         raise TransformError(f"Failed to import transform module '{module_name}': No module named '{module_name}'")
             except Exception as e:
+                logger.error("Error loading transform module", 
+                           module_name=module_name, 
+                           config_dir=config_dir, 
+                           error=str(e))
                 raise TransformError(f"Failed to import transform module '{module_name}': {e}")
         except Exception as e:
+            logger.error("Unexpected error loading transform module", 
+                       module_name=module_name, 
+                       config_dir=config_dir, 
+                       error=str(e))
             raise TransformError(f"Unexpected error loading transform module: {e}")
     
     def get_transform_function(self, transform_path: str) -> Optional[Callable]:

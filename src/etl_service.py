@@ -45,6 +45,9 @@ class ETLService:
             
             # Load transform module from config directory
             config_dir = os.path.dirname(os.path.abspath(config_path))
+            self.logger.debug("Loading transform module", 
+                            config_path=config_path, 
+                            config_dir=config_dir)
             self.transform_service.load_transform_module(config_dir=config_dir)
             
             # Initialize replication service
