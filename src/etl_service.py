@@ -334,13 +334,27 @@ class ETLService:
                                target_table=table_mapping.target_table,
                                init_query=table_mapping.init_query)
                 
-                # Parse source from mapping key (format: source_name.table_name)
-                if '.' not in mapping_key:
-                    self.logger.warning("Invalid mapping key format, skipping init query", 
-                                      mapping_key=mapping_key)
-                    continue
+                # Get source name from source_table field if available, otherwise from mapping key
+                if table_mapping.source_table:
+                    try:
+                        source_name, _ = self.config.parse_source_table(table_mapping.source_table)
+                    except Exception as e:
+                        self.logger.warning("Invalid source_table format, using mapping key", 
+                                          source_table=table_mapping.source_table, error=str(e))
+                        # Fallback to mapping key
+                        if '.' not in mapping_key:
+                            self.logger.warning("Invalid mapping key format, skipping init query", 
+                                              mapping_key=mapping_key)
+                            continue
+                        source_name = mapping_key.split('.')[0]
+                else:
+                    # Fallback to mapping key (format: source_name.table_name)
+                    if '.' not in mapping_key:
+                        self.logger.warning("Invalid mapping key format, skipping init query", 
+                                          mapping_key=mapping_key)
+                        continue
+                    source_name = mapping_key.split('.')[0]
                 
-                source_name = mapping_key.split('.')[0]
                 if source_name not in self.config.sources:
                     self.logger.warning("Source not found in configuration, skipping init query", 
                                       source_name=source_name, mapping_key=mapping_key)

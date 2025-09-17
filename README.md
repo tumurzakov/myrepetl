@@ -299,6 +299,7 @@ make test-fast
   - `transform`: Путь к функции трансформации
   - `value`: Статическое значение
 - `init_query`: (опционально) SQL запрос для инициализации пустой целевой таблицы
+- `source_table`: (опционально) Явное указание исходной таблицы в формате `{source_name}.{table_name}`. Если указано, система будет использовать это поле для выбора записей вместо ключа mapping
 - `filter`: (опционально) Условия фильтрации данных
 
 **Примеры маппинга:**
@@ -325,6 +326,7 @@ make test-fast
   "mapping": {
     "source1.users": {
       "init_query": "SELECT * FROM users WHERE status = 'active' AND id > 2",
+      "source_table": "source1.users",
       "target_table": "target1.users",
       "primary_key": "id",
       "column_mapping": {
@@ -336,6 +338,36 @@ make test-fast
       "filter": {
         "status": {"eq": "active"},
         "id": {"gt": 2}
+      }
+    }
+  }
+}
+```
+
+#### Source Table (Исходная таблица)
+Параметр `source_table` позволяет явно указать исходную таблицу для обработки. Это особенно полезно когда:
+
+- Ключ mapping не соответствует реальной структуре таблиц
+- Нужно обрабатывать таблицы с одинаковыми именами из разных источников
+- Требуется более гибкое управление выбором записей
+
+**Как работает source_table:**
+1. Если указан `source_table`, система использует его для выбора записей
+2. Ключ mapping игнорируется при выборе записей (но остается для обратной совместимости)
+3. `source_table` должен быть в формате `{source_name}.{table_name}`
+4. Система автоматически определяет источник и таблицу из этого поля
+
+**Пример с source_table:**
+```json
+{
+  "mapping": {
+    "custom_key": {
+      "source_table": "source1.users",
+      "target_table": "target1.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"}
       }
     }
   }

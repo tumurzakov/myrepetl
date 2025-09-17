@@ -84,6 +84,7 @@ class TableMapping:
     column_mapping: Dict[str, ColumnMapping]
     filter: Optional[Dict[str, Any]] = None
     init_query: Optional[str] = None
+    source_table: Optional[str] = None
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -152,7 +153,8 @@ class ETLConfig:
                     primary_key=table_config['primary_key'],
                     column_mapping=column_mapping,
                     filter=table_config.get('filter'),
-                    init_query=table_config.get('init_query')
+                    init_query=table_config.get('init_query'),
+                    source_table=table_config.get('source_table')
                 )
             
             return cls(
@@ -189,3 +191,21 @@ class ETLConfig:
             raise ConfigurationError(f"Target '{target_name}' not found in configuration")
         
         return target_name, table_name
+    
+    def get_mapping_by_source_table(self, source_table: str) -> Optional[TableMapping]:
+        """Get table mapping by source_table field"""
+        for mapping in self.mapping.values():
+            if mapping.source_table == source_table:
+                return mapping
+        return None
+    
+    def parse_source_table(self, source_table: str) -> Tuple[str, str]:
+        """Parse source table string like 'source1.users' into (source_name, table_name)"""
+        if '.' not in source_table:
+            raise ConfigurationError(f"Source table must be in format 'source_name.table_name', got: {source_table}")
+        
+        source_name, table_name = source_table.split('.', 1)
+        if source_name not in self.sources:
+            raise ConfigurationError(f"Source '{source_name}' not found in configuration")
+        
+        return source_name, table_name

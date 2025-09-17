@@ -162,13 +162,20 @@ class ReplicationService:
     
     def get_table_mapping(self, config: ETLConfig, schema: str, table: str, source_name: str = None) -> Optional[Dict[str, Any]]:
         """Get table mapping configuration"""
-        # Try new format first: source_name.table
+        # First try to find mapping by source_table field
+        if source_name:
+            source_table = f"{source_name}.{table}"
+            mapping = config.get_mapping_by_source_table(source_table)
+            if mapping:
+                return mapping
+        
+        # Fallback to old format: mapping key (for backward compatibility)
         if source_name:
             mapping_key = f"{source_name}.{table}"
             if mapping_key in config.mapping:
                 return config.mapping.get(mapping_key)
         
-        # Fallback to old format: schema.table (for backward compatibility)
+        # Fallback to schema.table format
         mapping_key = f"{schema}.{table}"
         return config.mapping.get(mapping_key)
     
