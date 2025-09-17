@@ -83,9 +83,19 @@ class DatabaseService:
     def get_master_status(self, config: DatabaseConfig) -> Dict[str, Any]:
         """Get MySQL master status"""
         connection_name = "master_status"
+        connection = None
+        
         try:
+            # Create a new connection specifically for this operation
             connection = self.connect(config, connection_name)
-            with self.get_cursor(connection_name) as cursor:
+            
+            # Verify connection is still valid before using it
+            if not self.is_connected(connection_name):
+                raise ConnectionError("Connection is not valid")
+            
+            # Use the connection directly to avoid additional connection lookups
+            cursor = connection.cursor()
+            try:
                 cursor.execute("SHOW MASTER STATUS")
                 result = cursor.fetchone()
                 
@@ -99,16 +109,25 @@ class DatabaseService:
                     }
                 else:
                     raise ConnectionError("Could not get master status")
+            finally:
+                # Ensure cursor is closed
+                try:
+                    cursor.close()
+                except Exception as e:
+                    self.logger.debug("Error closing cursor (expected during cleanup)", 
+                                    connection_name=connection_name, error=str(e))
+                    
         except Exception as e:
             self.logger.error("Error getting master status", error=str(e), connection_name=connection_name)
             raise ConnectionError(f"Error getting master status: {e}")
         finally:
             # Ensure connection is properly closed
-            try:
-                self.close_connection(connection_name)
-            except Exception as e:
-                self.logger.debug("Error closing master status connection (expected during cleanup)", 
-                                connection_name=connection_name, error=str(e))
+            if connection_name in self._connections:
+                try:
+                    self.close_connection(connection_name)
+                except Exception as e:
+                    self.logger.debug("Error closing master status connection (expected during cleanup)", 
+                                    connection_name=connection_name, error=str(e))
     
     def test_connection(self, config: DatabaseConfig) -> bool:
         """Test database connection"""
@@ -138,10 +157,17 @@ class DatabaseService:
             # Check if connection is still open
             if hasattr(connection, 'open') and not connection.open:
                 return False
-            # Test the connection
+            # Check if connection has a valid socket
+            if hasattr(connection, '_sock') and connection._sock is None:
+                return False
+            # Test the connection with a simple ping
             connection.ping(reconnect=False)
             return True
+        except (ConnectionError, OSError, IOError, AttributeError):
+            # These are expected when connection is closed
+            return False
         except Exception:
+            # Any other exception means connection is not usable
             return False
     
     def reconnect_if_needed(self, connection_name: str) -> None:
@@ -154,35 +180,53 @@ class DatabaseService:
     
     def close_connection(self, connection_name: str = "default") -> None:
         """Close database connection"""
-        if connection_name in self._connections:
-            connection = self._connections[connection_name]
-            try:
-                # Check if connection is still valid before closing
-                if hasattr(connection, 'open') and not connection.open:
-                    self.logger.debug("Connection already closed", connection_name=connection_name)
-                else:
-                    # Принудительно закрываем соединение
-                    if hasattr(connection, 'close'):
-                        connection.close()
-                    # Дополнительно пытаемся откатить транзакции
+        if connection_name not in self._connections:
+            self.logger.debug("Connection not found for closing", connection_name=connection_name)
+            return
+            
+        connection = self._connections[connection_name]
+        
+        try:
+            # Check if connection is still valid before closing
+            if hasattr(connection, 'open') and not connection.open:
+                self.logger.debug("Connection already closed", connection_name=connection_name)
+            else:
+                # Check if connection has a valid socket before attempting to close
+                if hasattr(connection, '_sock') and connection._sock is not None:
+                    # Try to rollback any pending transactions first
                     if hasattr(connection, 'rollback'):
                         try:
                             connection.rollback()
-                        except Exception:
+                        except (ConnectionError, OSError, IOError, AttributeError):
+                            # These are expected when connection is already closed
                             pass
-            except (ConnectionError, OSError, IOError, AttributeError) as e:
-                # Connection errors during close are expected
-                self.logger.debug("Connection error during close (expected)", 
-                                connection_name=connection_name, error=str(e))
-            except Exception as e:
-                self.logger.warning("Unexpected error closing connection", 
-                                  connection_name=connection_name, error=str(e))
-            finally:
-                # Удаляем из словарей
+                        except Exception as e:
+                            self.logger.debug("Error during rollback (expected during cleanup)", 
+                                            connection_name=connection_name, error=str(e))
+                    
+                    # Close the connection
+                    if hasattr(connection, 'close'):
+                        connection.close()
+                else:
+                    self.logger.debug("Connection socket already closed", connection_name=connection_name)
+                    
+        except (ConnectionError, OSError, IOError, AttributeError) as e:
+            # Connection errors during close are expected
+            self.logger.debug("Connection error during close (expected)", 
+                            connection_name=connection_name, error=str(e))
+        except Exception as e:
+            self.logger.warning("Unexpected error closing connection", 
+                              connection_name=connection_name, error=str(e))
+        finally:
+            # Always remove from dictionaries, even if close failed
+            try:
                 if connection_name in self._connections:
                     del self._connections[connection_name]
                 if connection_name in self._connection_configs:
                     del self._connection_configs[connection_name]
+            except Exception as e:
+                self.logger.debug("Error removing connection from dictionaries", 
+                                connection_name=connection_name, error=str(e))
     
     def close_all_connections(self) -> None:
         """Close all database connections"""
