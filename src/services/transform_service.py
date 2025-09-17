@@ -140,7 +140,7 @@ class TransformService:
                     transform_func = self.get_transform_function(target_config.transform)
                     if transform_func:
                         value = row_data.get(source_col)
-                        transformed_value = transform_func(value)
+                        transformed_value = transform_func(value, row_data)
                         transformed_data[target_col] = transformed_value
                     else:
                         # Fallback to original value

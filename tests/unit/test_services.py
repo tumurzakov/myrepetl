@@ -495,7 +495,7 @@ class TestTransformService:
             result = service.apply_column_transforms(row_data, column_mapping)
             
             assert result == {"id": 1, "name": "TRANSFORMED"}
-            mock_function.assert_called_once_with("test")
+            mock_function.assert_called_once_with("test", {"id": 1, "name": "test"})
     
     def test_apply_column_transforms_simple_copy(self):
         """Test applying column transforms with simple copy"""
