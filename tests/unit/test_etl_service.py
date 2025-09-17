@@ -200,7 +200,7 @@ class TestETLService:
             mock_replication_service.return_value.get_table_mapping.assert_called_once()
             mock_config.parse_target_table.assert_called_once_with("target1.users")
             mock_transform_service.return_value.apply_column_transforms.assert_called_once_with(
-                {"id": 1, "name": "new"}, mock_table_mapping.column_mapping
+                {"id": 1, "name": "new"}, mock_table_mapping.column_mapping, "test_schema.test_table"
             )
             mock_sql_builder.build_upsert_sql.assert_called_once_with("users", {"id": 1, "name": "UPDATED"}, "id")
             mock_db_service.return_value.execute_update.assert_called_once_with("UPDATE SQL", [1, "UPDATED"], "target1")

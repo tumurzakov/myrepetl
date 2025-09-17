@@ -311,7 +311,8 @@ class TestFullPipeline:
         # Test uppercase transform
         result = service.transform_service.apply_column_transforms(
             {"name": "test"},
-            {"name": ColumnMapping(column="name", transform="transform.uppercase")}
+            {"name": ColumnMapping(column="name", transform="transform.uppercase")},
+            "test_schema.test_table"
         )
         
         assert result["name"] == "TEST"
@@ -319,7 +320,8 @@ class TestFullPipeline:
         # Test static value
         result = service.transform_service.apply_column_transforms(
             {"name": "test"},
-            {"name": ColumnMapping(column="name", value="STATIC")}
+            {"name": ColumnMapping(column="name", value="STATIC")},
+            "test_schema.test_table"
         )
         
         assert result["name"] == "STATIC"
@@ -327,7 +329,8 @@ class TestFullPipeline:
         # Test simple copy
         result = service.transform_service.apply_column_transforms(
             {"name": "test"},
-            {"name": ColumnMapping(column="name")}
+            {"name": ColumnMapping(column="name")},
+            "test_schema.test_table"
         )
         
         assert result["name"] == "test"

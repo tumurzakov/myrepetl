@@ -149,8 +149,9 @@ class ETLService:
                 return
         
         # Apply transformations
+        source_table = f"{event.schema}.{event.table}"
         transformed_data = self.transform_service.apply_column_transforms(
-            event.values, table_mapping.column_mapping
+            event.values, table_mapping.column_mapping, source_table
         )
         
         # Build and execute UPSERT
@@ -197,12 +198,14 @@ class ETLService:
                                 schema=event.schema,
                                 source_name=event.source_name,
                                 filter=table_mapping.filter)
-                self._delete_filtered_record(event.before_values, table_mapping, target_name, target_table_name)
+                source_table = f"{event.schema}.{event.table}"
+                self._delete_filtered_record(event.before_values, table_mapping, target_name, target_table_name, source_table)
                 return
         
         # Apply transformations to after_values
+        source_table = f"{event.schema}.{event.table}"
         transformed_data = self.transform_service.apply_column_transforms(
-            event.after_values, table_mapping.column_mapping
+            event.after_values, table_mapping.column_mapping, source_table
         )
         
         # Build and execute UPSERT
@@ -238,8 +241,9 @@ class ETLService:
                 return
         
         # Apply transformations to get primary key
+        source_table = f"{event.schema}.{event.table}"
         transformed_data = self.transform_service.apply_column_transforms(
-            event.values, table_mapping.column_mapping
+            event.values, table_mapping.column_mapping, source_table
         )
         
         # Build and execute DELETE
@@ -255,11 +259,11 @@ class ETLService:
                         transformed=transformed_data,
                         target_name=target_name)
     
-    def _delete_filtered_record(self, values: dict, table_mapping, target_name: str, target_table_name: str) -> None:
+    def _delete_filtered_record(self, values: dict, table_mapping, target_name: str, target_table_name: str, source_table: str) -> None:
         """Delete a record that was previously included but now filtered out"""
         # Apply transformations to get primary key
         transformed_data = self.transform_service.apply_column_transforms(
-            values, table_mapping.column_mapping
+            values, table_mapping.column_mapping, source_table
         )
         
         # Build and execute DELETE
@@ -391,8 +395,9 @@ class ETLService:
                                 continue
                         
                         # Apply transformations
+                        source_table = mapping_key  # mapping_key is already in format "source_name.table_name"
                         transformed_data = self.transform_service.apply_column_transforms(
-                            row_dict, table_mapping.column_mapping
+                            row_dict, table_mapping.column_mapping, source_table
                         )
                         
                         # Build and execute UPSERT

@@ -124,7 +124,7 @@ class TransformService:
         except Exception as e:
             raise TransformError(f"Error getting transform function: {e}")
     
-    def apply_column_transforms(self, row_data: Dict[str, Any], column_mapping: Dict[str, ColumnMapping]) -> Dict[str, Any]:
+    def apply_column_transforms(self, row_data: Dict[str, Any], column_mapping: Dict[str, ColumnMapping], source_table: str = None) -> Dict[str, Any]:
         """Apply transformations to row data according to column mapping"""
         transformed_data = {}
         
@@ -140,7 +140,7 @@ class TransformService:
                     transform_func = self.get_transform_function(target_config.transform)
                     if transform_func:
                         value = row_data.get(source_col)
-                        transformed_value = transform_func(value, row_data)
+                        transformed_value = transform_func(value, row_data, source_table)
                         transformed_data[target_col] = transformed_value
                     else:
                         # Fallback to original value
