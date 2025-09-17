@@ -51,12 +51,25 @@ class ReplicationService:
             
             # Configure table filters if tables are specified
             only_tables = None
+            only_schemas = None
             if tables:
                 only_tables = {}
+                schemas = set()
                 for schema, table in tables:
                     if schema not in only_tables:
                         only_tables[schema] = []
                     only_tables[schema].append(table)
+                    schemas.add(schema)
+                
+                only_schemas = list(schemas)
+                
+                # Log the filter parameters for debugging
+                import structlog
+                logger = structlog.get_logger()
+                logger.info("Configuring table filters for replication", 
+                           source_name=source_name,
+                           only_tables=only_tables,
+                           only_schemas=only_schemas)
             
             # Create binlog stream
             stream = BinLogStreamReader(
@@ -67,7 +80,8 @@ class ReplicationService:
                 resume_stream=replication_config.resume_stream,
                 blocking=replication_config.blocking,
                 only_events=only_events,
-                only_tables=only_tables
+                only_tables=only_tables,
+                only_schemas=only_schemas
             )
             
             self._streams[source_name] = stream
