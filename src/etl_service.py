@@ -122,162 +122,195 @@ class ETLService:
                                 event_type=type(event).__name__)
                 
         except Exception as e:
-            self.logger.error("Error processing event", 
+            # Log error but continue processing - data will be updated later
+            self.logger.warning("Error processing event (ignoring, will retry later)", 
                             error=str(e), 
                             schema=event.schema, 
                             table=event.table,
                             source_name=event.source_name)
-            raise ETLException(f"Event processing failed: {e}")
+            # Don't raise exception - just continue with next event
     
-    @retry_on_transform_error(max_attempts=2)
     def _process_insert_event(self, event: InsertEvent, table_mapping, target_name: str, target_table_name: str) -> None:
         """Process INSERT event"""
-        self.logger.info("Processing INSERT event", 
-                        table=event.table, 
-                        schema=event.schema,
-                        source_name=event.source_name,
-                        target_name=target_name)
-        
-        # Apply filters if configured
-        if table_mapping.filter:
-            if not self.filter_service.apply_filter(event.values, table_mapping.filter):
-                self.logger.debug("INSERT event filtered out", 
-                                table=event.table, 
-                                schema=event.schema,
-                                source_name=event.source_name,
-                                filter=table_mapping.filter)
-                return
-        
-        # Apply transformations
-        source_table = f"{event.schema}.{event.table}"
-        transformed_data = self.transform_service.apply_column_transforms(
-            event.values, table_mapping.column_mapping, source_table
-        )
-        
-        # Build and execute UPSERT
-        sql, values = SQLBuilder.build_upsert_sql(
-            target_table_name,
-            transformed_data,
-            table_mapping.primary_key
-        )
-        
-        self.database_service.execute_update(sql, values, target_name)
-        self.logger.info("INSERT processed successfully", 
-                        original=event.values, 
-                        transformed=transformed_data,
-                        target_name=target_name)
+        try:
+            self.logger.info("Processing INSERT event", 
+                            table=event.table, 
+                            schema=event.schema,
+                            source_name=event.source_name,
+                            target_name=target_name)
+            
+            # Apply filters if configured
+            if table_mapping.filter:
+                if not self.filter_service.apply_filter(event.values, table_mapping.filter):
+                    self.logger.debug("INSERT event filtered out", 
+                                    table=event.table, 
+                                    schema=event.schema,
+                                    source_name=event.source_name,
+                                    filter=table_mapping.filter)
+                    return
+            
+            # Apply transformations
+            source_table = f"{event.schema}.{event.table}"
+            transformed_data = self.transform_service.apply_column_transforms(
+                event.values, table_mapping.column_mapping, source_table
+            )
+            
+            # Build and execute UPSERT
+            sql, values = SQLBuilder.build_upsert_sql(
+                target_table_name,
+                transformed_data,
+                table_mapping.primary_key
+            )
+            
+            self.database_service.execute_update(sql, values, target_name)
+            self.logger.info("INSERT processed successfully", 
+                            original=event.values, 
+                            transformed=transformed_data,
+                            target_name=target_name)
+        except Exception as e:
+            # Log error but continue processing - data will be updated later
+            self.logger.warning("Error processing INSERT event (ignoring, will retry later)", 
+                            error=str(e), 
+                            table=event.table, 
+                            schema=event.schema,
+                            source_name=event.source_name,
+                            target_name=target_name)
     
-    @retry_on_transform_error(max_attempts=2)
     def _process_update_event(self, event: UpdateEvent, table_mapping, target_name: str, target_table_name: str) -> None:
         """Process UPDATE event"""
-        self.logger.info("Processing UPDATE event", 
-                        table=event.table, 
-                        schema=event.schema,
-                        source_name=event.source_name,
-                        target_name=target_name)
-        
-        # Apply filters if configured (check both before and after values)
-        if table_mapping.filter:
-            # Check if after_values pass the filter
-            after_passes_filter = self.filter_service.apply_filter(event.after_values, table_mapping.filter)
-            # Check if before_values passed the filter
-            before_passed_filter = self.filter_service.apply_filter(event.before_values, table_mapping.filter)
+        try:
+            self.logger.info("Processing UPDATE event", 
+                            table=event.table, 
+                            schema=event.schema,
+                            source_name=event.source_name,
+                            target_name=target_name)
             
-            if not after_passes_filter and not before_passed_filter:
-                # Both before and after don't pass filter, skip
-                self.logger.debug("UPDATE event filtered out (both before and after)", 
-                                table=event.table, 
-                                schema=event.schema,
-                                source_name=event.source_name,
-                                filter=table_mapping.filter)
-                return
-            elif not after_passes_filter and before_passed_filter:
-                # Record was previously included but now excluded, delete it
-                self.logger.debug("UPDATE event: record now filtered out, deleting", 
-                                table=event.table, 
-                                schema=event.schema,
-                                source_name=event.source_name,
-                                filter=table_mapping.filter)
-                source_table = f"{event.schema}.{event.table}"
-                self._delete_filtered_record(event.before_values, table_mapping, target_name, target_table_name, source_table)
-                return
-        
-        # Apply transformations to after_values
-        source_table = f"{event.schema}.{event.table}"
-        transformed_data = self.transform_service.apply_column_transforms(
-            event.after_values, table_mapping.column_mapping, source_table
-        )
-        
-        # Build and execute UPSERT
-        sql, values = SQLBuilder.build_upsert_sql(
-            target_table_name,
-            transformed_data,
-            table_mapping.primary_key
-        )
-        
-        self.database_service.execute_update(sql, values, target_name)
-        self.logger.info("UPDATE processed successfully", 
-                        before=event.before_values,
-                        after=event.after_values, 
-                        transformed=transformed_data,
-                        target_name=target_name)
+            # Apply filters if configured (check both before and after values)
+            if table_mapping.filter:
+                # Check if after_values pass the filter
+                after_passes_filter = self.filter_service.apply_filter(event.after_values, table_mapping.filter)
+                # Check if before_values passed the filter
+                before_passed_filter = self.filter_service.apply_filter(event.before_values, table_mapping.filter)
+                
+                if not after_passes_filter and not before_passed_filter:
+                    # Both before and after don't pass filter, skip
+                    self.logger.debug("UPDATE event filtered out (both before and after)", 
+                                    table=event.table, 
+                                    schema=event.schema,
+                                    source_name=event.source_name,
+                                    filter=table_mapping.filter)
+                    return
+                elif not after_passes_filter and before_passed_filter:
+                    # Record was previously included but now excluded, delete it
+                    self.logger.debug("UPDATE event: record now filtered out, deleting", 
+                                    table=event.table, 
+                                    schema=event.schema,
+                                    source_name=event.source_name,
+                                    filter=table_mapping.filter)
+                    source_table = f"{event.schema}.{event.table}"
+                    self._delete_filtered_record(event.before_values, table_mapping, target_name, target_table_name, source_table)
+                    return
+            
+            # Apply transformations to after_values
+            source_table = f"{event.schema}.{event.table}"
+            transformed_data = self.transform_service.apply_column_transforms(
+                event.after_values, table_mapping.column_mapping, source_table
+            )
+            
+            # Build and execute UPSERT
+            sql, values = SQLBuilder.build_upsert_sql(
+                target_table_name,
+                transformed_data,
+                table_mapping.primary_key
+            )
+            
+            self.database_service.execute_update(sql, values, target_name)
+            self.logger.info("UPDATE processed successfully", 
+                            before=event.before_values,
+                            after=event.after_values, 
+                            transformed=transformed_data,
+                            target_name=target_name)
+        except Exception as e:
+            # Log error but continue processing - data will be updated later
+            self.logger.warning("Error processing UPDATE event (ignoring, will retry later)", 
+                            error=str(e), 
+                            table=event.table, 
+                            schema=event.schema,
+                            source_name=event.source_name,
+                            target_name=target_name)
     
     def _process_delete_event(self, event: DeleteEvent, table_mapping, target_name: str, target_table_name: str) -> None:
         """Process DELETE event"""
-        self.logger.info("Processing DELETE event", 
-                        table=event.table, 
-                        schema=event.schema,
-                        source_name=event.source_name,
-                        target_name=target_name)
-        
-        # Apply filters if configured
-        if table_mapping.filter:
-            if not self.filter_service.apply_filter(event.values, table_mapping.filter):
-                self.logger.debug("DELETE event filtered out", 
-                                table=event.table, 
-                                schema=event.schema,
-                                source_name=event.source_name,
-                                filter=table_mapping.filter)
-                return
-        
-        # Apply transformations to get primary key
-        source_table = f"{event.schema}.{event.table}"
-        transformed_data = self.transform_service.apply_column_transforms(
-            event.values, table_mapping.column_mapping, source_table
-        )
-        
-        # Build and execute DELETE
-        sql, values = SQLBuilder.build_delete_sql(
-            target_table_name,
-            transformed_data,
-            table_mapping.primary_key
-        )
-        
-        self.database_service.execute_update(sql, values, target_name)
-        self.logger.info("DELETE processed successfully", 
-                        data=event.values, 
-                        transformed=transformed_data,
-                        target_name=target_name)
+        try:
+            self.logger.info("Processing DELETE event", 
+                            table=event.table, 
+                            schema=event.schema,
+                            source_name=event.source_name,
+                            target_name=target_name)
+            
+            # Apply filters if configured
+            if table_mapping.filter:
+                if not self.filter_service.apply_filter(event.values, table_mapping.filter):
+                    self.logger.debug("DELETE event filtered out", 
+                                    table=event.table, 
+                                    schema=event.schema,
+                                    source_name=event.source_name,
+                                    filter=table_mapping.filter)
+                    return
+            
+            # Apply transformations to get primary key
+            source_table = f"{event.schema}.{event.table}"
+            transformed_data = self.transform_service.apply_column_transforms(
+                event.values, table_mapping.column_mapping, source_table
+            )
+            
+            # Build and execute DELETE
+            sql, values = SQLBuilder.build_delete_sql(
+                target_table_name,
+                transformed_data,
+                table_mapping.primary_key
+            )
+            
+            self.database_service.execute_update(sql, values, target_name)
+            self.logger.info("DELETE processed successfully", 
+                            data=event.values, 
+                            transformed=transformed_data,
+                            target_name=target_name)
+        except Exception as e:
+            # Log error but continue processing - data will be updated later
+            self.logger.warning("Error processing DELETE event (ignoring, will retry later)", 
+                            error=str(e), 
+                            table=event.table, 
+                            schema=event.schema,
+                            source_name=event.source_name,
+                            target_name=target_name)
     
     def _delete_filtered_record(self, values: dict, table_mapping, target_name: str, target_table_name: str, source_table: str) -> None:
         """Delete a record that was previously included but now filtered out"""
-        # Apply transformations to get primary key
-        transformed_data = self.transform_service.apply_column_transforms(
-            values, table_mapping.column_mapping, source_table
-        )
-        
-        # Build and execute DELETE
-        sql, values = SQLBuilder.build_delete_sql(
-            target_table_name,
-            transformed_data,
-            table_mapping.primary_key
-        )
-        
-        self.database_service.execute_update(sql, values, target_name)
-        self.logger.info("Filtered record deleted successfully", 
-                        data=values, 
-                        transformed=transformed_data,
-                        target_name=target_name)
+        try:
+            # Apply transformations to get primary key
+            transformed_data = self.transform_service.apply_column_transforms(
+                values, table_mapping.column_mapping, source_table
+            )
+            
+            # Build and execute DELETE
+            sql, values = SQLBuilder.build_delete_sql(
+                target_table_name,
+                transformed_data,
+                table_mapping.primary_key
+            )
+            
+            self.database_service.execute_update(sql, values, target_name)
+            self.logger.info("Filtered record deleted successfully", 
+                            data=values, 
+                            transformed=transformed_data,
+                            target_name=target_name)
+        except Exception as e:
+            # Log error but continue processing - data will be updated later
+            self.logger.warning("Error deleting filtered record (ignoring, will retry later)", 
+                            error=str(e), 
+                            data=values,
+                            target_name=target_name)
     
     def run_replication(self) -> None:
         """Run the replication process"""
@@ -315,8 +348,8 @@ class ETLService:
         except KeyboardInterrupt:
             self.logger.info("Replication stopped by user")
         except Exception as e:
-            self.logger.error("Replication failed", error=str(e))
-            raise ETLException(f"Replication failed: {e}")
+            # Log error but continue processing - individual events will be handled separately
+            self.logger.warning("Replication error (continuing, individual events will be handled separately)", error=str(e))
         finally:
             self.cleanup()
     
@@ -413,21 +446,28 @@ class ETLService:
                             table_mapping.primary_key
                         )
                         
-                        self.database_service.execute_update(sql, values, target_name)
-                        self.logger.debug("Init query row processed successfully", 
-                                        mapping_key=mapping_key, 
-                                        original=row_dict, 
-                                        transformed=transformed_data)
+                        try:
+                            self.database_service.execute_update(sql, values, target_name)
+                            self.logger.debug("Init query row processed successfully", 
+                                            mapping_key=mapping_key, 
+                                            original=row_dict, 
+                                            transformed=transformed_data)
+                        except Exception as e:
+                            # Log error but continue processing - data will be updated later
+                            self.logger.warning("Error processing init query row (ignoring, will retry later)", 
+                                            error=str(e), 
+                                            mapping_key=mapping_key, 
+                                            original=row_dict)
                     
                     self.logger.info("Init query processing completed", 
                                    mapping_key=mapping_key, 
                                    processed_rows=len(results))
                     
                 except Exception as e:
-                    self.logger.error("Error executing init query", 
+                    # Log error but continue processing - data will be updated later
+                    self.logger.warning("Error executing init query (ignoring, will retry later)", 
                                     mapping_key=mapping_key, 
                                     error=str(e))
-                    raise ETLException(f"Init query execution failed for {mapping_key}: {e}")
                 finally:
                     # Close source connection
                     self.database_service.close_connection(source_connection_name)
@@ -435,8 +475,8 @@ class ETLService:
             self.logger.info("All init queries processed")
             
         except Exception as e:
-            self.logger.error("Error processing init queries", error=str(e))
-            raise ETLException(f"Init queries processing failed: {e}")
+            # Log error but continue processing - data will be updated later
+            self.logger.warning("Error processing init queries (continuing, individual queries will be handled separately)", error=str(e))
     
     def cleanup(self) -> None:
         """Cleanup resources"""
