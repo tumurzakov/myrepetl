@@ -80,7 +80,13 @@ class SourceThread:
         with self._stream_lock:
             if self._stream:
                 try:
-                    self._stream.close()
+                    # Check if stream is still valid before closing
+                    if hasattr(self._stream, 'close') and not getattr(self._stream, '_closed', False):
+                        self._stream.close()
+                except (ConnectionError, OSError, IOError) as e:
+                    # Connection errors during shutdown are expected
+                    self.logger.debug("Connection error during stream close (expected during shutdown)", 
+                                    source_name=self.source_name, error=str(e))
                 except Exception as e:
                     self.logger.error("Error closing replication stream", 
                                     source_name=self.source_name, error=str(e))
@@ -136,8 +142,25 @@ class SourceThread:
     def _connect_to_replication(self) -> None:
         """Connect to MySQL replication stream"""
         try:
-            # Get master status for starting position
-            master_status = self.database_service.get_master_status(self.source_config)
+            # Get master status for starting position with retry
+            master_status = None
+            max_retries = 3
+            retry_delay = 1.0
+            
+            for attempt in range(max_retries):
+                try:
+                    master_status = self.database_service.get_master_status(self.source_config)
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        self.logger.error("Failed to get master status after all retries", 
+                                        source_name=self.source_name, error=str(e), attempts=max_retries)
+                        raise ReplicationError(f"Failed to get master status for source '{self.source_name}' after {max_retries} attempts: {e}")
+                    else:
+                        self.logger.warning("Failed to get master status, retrying", 
+                                          source_name=self.source_name, error=str(e), 
+                                          attempt=attempt + 1, max_retries=max_retries)
+                        time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
             
             # Prepare connection parameters
             connection_params = {
@@ -227,6 +250,21 @@ class SourceThread:
                                     event_type=type(event).__name__,
                                     table=f"{event.schema}.{event.table}")
                 
+        except (ConnectionError, OSError, IOError) as e:
+            # Handle connection-related errors gracefully
+            if self._is_shutdown_requested():
+                # If shutdown requested, don't raise exception
+                self.logger.info("Connection error during shutdown, ignoring", 
+                               source_name=self.source_name, error=str(e))
+                return
+            
+            with self._stats_lock:
+                self._stats['errors_count'] += 1
+            
+            self.logger.error("Connection error reading binlog events", 
+                            source_name=self.source_name, error=str(e))
+            self.message_bus.publish_error(self.source_name, e)
+            raise ReplicationError(f"Connection error reading binlog events from source '{self.source_name}': {e}")
         except Exception as e:
             if self._is_shutdown_requested():
                 # If shutdown requested, don't raise exception

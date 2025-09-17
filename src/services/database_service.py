@@ -16,6 +16,8 @@ class DatabaseService:
     def __init__(self):
         self._connections: Dict[str, pymysql.Connection] = {}
         self._connection_configs: Dict[str, DatabaseConfig] = {}
+        import structlog
+        self.logger = structlog.get_logger()
     
     def connect(self, config: DatabaseConfig, connection_name: str = "default") -> pymysql.Connection:
         """Connect to database"""
@@ -32,7 +34,19 @@ class DatabaseService:
         """Get existing connection"""
         if connection_name not in self._connections:
             raise ConnectionError(f"Connection '{connection_name}' not found")
-        return self._connections[connection_name]
+        
+        connection = self._connections[connection_name]
+        
+        # Check if connection is still valid
+        if not self.is_connected(connection_name):
+            self.logger.warning("Connection is no longer valid, removing from pool", 
+                              connection_name=connection_name)
+            del self._connections[connection_name]
+            if connection_name in self._connection_configs:
+                del self._connection_configs[connection_name]
+            raise ConnectionError(f"Connection '{connection_name}' is no longer valid")
+        
+        return connection
     
     @contextmanager
     def get_cursor(self, connection_name: str = "default"):
@@ -68,9 +82,10 @@ class DatabaseService:
     
     def get_master_status(self, config: DatabaseConfig) -> Dict[str, Any]:
         """Get MySQL master status"""
+        connection_name = "master_status"
         try:
-            connection = self.connect(config, "master_status")
-            with self.get_cursor("master_status") as cursor:
+            connection = self.connect(config, connection_name)
+            with self.get_cursor(connection_name) as cursor:
                 cursor.execute("SHOW MASTER STATUS")
                 result = cursor.fetchone()
                 
@@ -85,9 +100,15 @@ class DatabaseService:
                 else:
                     raise ConnectionError("Could not get master status")
         except Exception as e:
+            self.logger.error("Error getting master status", error=str(e), connection_name=connection_name)
             raise ConnectionError(f"Error getting master status: {e}")
         finally:
-            self.close_connection("master_status")
+            # Ensure connection is properly closed
+            try:
+                self.close_connection(connection_name)
+            except Exception as e:
+                self.logger.debug("Error closing master status connection (expected during cleanup)", 
+                                connection_name=connection_name, error=str(e))
     
     def test_connection(self, config: DatabaseConfig) -> bool:
         """Test database connection"""
@@ -114,6 +135,10 @@ class DatabaseService:
             return False
         try:
             connection = self._connections[connection_name]
+            # Check if connection is still open
+            if hasattr(connection, 'open') and not connection.open:
+                return False
+            # Test the connection
             connection.ping(reconnect=False)
             return True
         except Exception:
@@ -132,17 +157,26 @@ class DatabaseService:
         if connection_name in self._connections:
             connection = self._connections[connection_name]
             try:
-                # Принудительно закрываем соединение
-                if hasattr(connection, 'close'):
-                    connection.close()
-                # Дополнительно пытаемся откатить транзакции
-                if hasattr(connection, 'rollback'):
-                    try:
-                        connection.rollback()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                # Check if connection is still valid before closing
+                if hasattr(connection, 'open') and not connection.open:
+                    self.logger.debug("Connection already closed", connection_name=connection_name)
+                else:
+                    # Принудительно закрываем соединение
+                    if hasattr(connection, 'close'):
+                        connection.close()
+                    # Дополнительно пытаемся откатить транзакции
+                    if hasattr(connection, 'rollback'):
+                        try:
+                            connection.rollback()
+                        except Exception:
+                            pass
+            except (ConnectionError, OSError, IOError, AttributeError) as e:
+                # Connection errors during close are expected
+                self.logger.debug("Connection error during close (expected)", 
+                                connection_name=connection_name, error=str(e))
+            except Exception as e:
+                self.logger.warning("Unexpected error closing connection", 
+                                  connection_name=connection_name, error=str(e))
             finally:
                 # Удаляем из словарей
                 if connection_name in self._connections:
@@ -165,12 +199,23 @@ class DatabaseService:
     def is_table_empty(self, table_name: str, connection_name: str = "default") -> bool:
         """Check if table is empty"""
         try:
+            # Check if connection exists before trying to use it
+            if connection_name not in self._connections:
+                self.logger.warning("Connection not found, skipping table empty check", 
+                                  connection_name=connection_name, table_name=table_name)
+                return False
+            
             with self.get_cursor(connection_name) as cursor:
                 cursor.execute(f"SELECT COUNT(*) FROM `{table_name}`")
                 result = cursor.fetchone()
                 return result[0] == 0
         except Exception as e:
-            raise ConnectionError(f"Error checking if table '{table_name}' is empty: {e}")
+            # Log warning instead of raising exception to prevent cleanup failures
+            import structlog
+            logger = structlog.get_logger()
+            logger.warning("Error checking if table is empty (continuing cleanup)", 
+                         connection_name=connection_name, table_name=table_name, error=str(e))
+            return False
     
     def execute_init_query(self, query: str, connection_name: str = "default") -> Tuple[list, list]:
         """Execute init query and return results with column names"""
