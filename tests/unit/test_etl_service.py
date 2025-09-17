@@ -122,6 +122,7 @@ class TestETLService:
             mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock(), "name": Mock()}
+            mock_table_mapping.filter = None
             
             mock_config = Mock()
             mock_config.parse_target_table.return_value = ("target1", "users")
@@ -135,6 +136,7 @@ class TestETLService:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
+            service.filter_service = Mock()
             service.config = mock_config
             
             event = InsertEvent(
@@ -166,6 +168,7 @@ class TestETLService:
             mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock(), "name": Mock()}
+            mock_table_mapping.filter = None
             
             mock_config = Mock()
             mock_config.parse_target_table.return_value = ("target1", "users")
@@ -179,6 +182,7 @@ class TestETLService:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
+            service.filter_service = Mock()
             service.config = mock_config
             
             event = UpdateEvent(
@@ -213,6 +217,7 @@ class TestETLService:
             mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock()}
+            mock_table_mapping.filter = None
             
             mock_config = Mock()
             mock_config.parse_target_table.return_value = ("target1", "users")
@@ -226,6 +231,7 @@ class TestETLService:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
+            service.filter_service = Mock()
             service.config = mock_config
             
             event = DeleteEvent(
@@ -297,9 +303,13 @@ class TestETLService:
             mock_config = Mock()
             mock_config.sources = {'source1': Mock(), 'source2': Mock()}
             mock_config.replication = Mock()
+            mock_config.mapping = {}
             
             service = ETLService()
             service.replication_service = mock_replication_service.return_value
+            service.database_service = Mock()
+            service.transform_service = Mock()
+            service.filter_service = Mock()
             service.config = mock_config
             
             with patch.object(service, 'process_event') as mock_process:
@@ -322,9 +332,13 @@ class TestETLService:
             mock_config = Mock()
             mock_config.sources = {'source1': Mock()}
             mock_config.replication = Mock()
+            mock_config.mapping = {}
             
             service = ETLService()
             service.replication_service = mock_replication_service.return_value
+            service.database_service = Mock()
+            service.transform_service = Mock()
+            service.filter_service = Mock()
             service.config = mock_config
             
             # Should not raise exception

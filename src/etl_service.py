@@ -276,6 +276,9 @@ class ETLService:
             # Connect to all targets
             self.connect_to_targets()
             
+            # Execute init queries for empty target tables
+            self.execute_init_queries()
+            
             # Connect to replication streams for all sources
             for source_name, source_config in self.config.sources.items():
                 self.replication_service.connect_to_replication(
@@ -301,6 +304,109 @@ class ETLService:
             raise ETLException(f"Replication failed: {e}")
         finally:
             self.cleanup()
+    
+    def execute_init_queries(self) -> None:
+        """Execute init queries for empty target tables"""
+        try:
+            self.logger.info("Checking for init queries to execute")
+            
+            for mapping_key, table_mapping in self.config.mapping.items():
+                if not table_mapping.init_query:
+                    continue
+                
+                # Parse target table to get target name and table name
+                target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
+                
+                # Check if target table is empty
+                if not self.database_service.is_table_empty(target_table_name, target_name):
+                    self.logger.debug("Target table not empty, skipping init query", 
+                                    mapping_key=mapping_key, 
+                                    target_table=table_mapping.target_table)
+                    continue
+                
+                self.logger.info("Executing init query for empty table", 
+                               mapping_key=mapping_key, 
+                               target_table=table_mapping.target_table,
+                               init_query=table_mapping.init_query)
+                
+                # Parse source from mapping key (format: source_name.table_name)
+                if '.' not in mapping_key:
+                    self.logger.warning("Invalid mapping key format, skipping init query", 
+                                      mapping_key=mapping_key)
+                    continue
+                
+                source_name = mapping_key.split('.')[0]
+                if source_name not in self.config.sources:
+                    self.logger.warning("Source not found in configuration, skipping init query", 
+                                      source_name=source_name, mapping_key=mapping_key)
+                    continue
+                
+                # Execute init query on source database
+                source_config = self.config.get_source_config(source_name)
+                source_connection_name = f"init_source_{source_name}"
+                
+                try:
+                    # Connect to source database
+                    self.database_service.connect(source_config, source_connection_name)
+                    
+                    # Execute init query
+                    results, columns = self.database_service.execute_init_query(
+                        table_mapping.init_query, source_connection_name
+                    )
+                    
+                    self.logger.info("Init query executed successfully", 
+                                   mapping_key=mapping_key, 
+                                   rows_count=len(results))
+                    
+                    # Process each row from init query
+                    for row_data in results:
+                        # Convert row to dictionary using column names
+                        row_dict = dict(zip(columns, row_data))
+                        
+                        # Apply filters if configured
+                        if table_mapping.filter:
+                            if not self.filter_service.apply_filter(row_dict, table_mapping.filter):
+                                self.logger.debug("Init query row filtered out", 
+                                                mapping_key=mapping_key, 
+                                                row=row_dict)
+                                continue
+                        
+                        # Apply transformations
+                        transformed_data = self.transform_service.apply_column_transforms(
+                            row_dict, table_mapping.column_mapping
+                        )
+                        
+                        # Build and execute UPSERT
+                        sql, values = SQLBuilder.build_upsert_sql(
+                            target_table_name,
+                            transformed_data,
+                            table_mapping.primary_key
+                        )
+                        
+                        self.database_service.execute_update(sql, values, target_name)
+                        self.logger.debug("Init query row processed successfully", 
+                                        mapping_key=mapping_key, 
+                                        original=row_dict, 
+                                        transformed=transformed_data)
+                    
+                    self.logger.info("Init query processing completed", 
+                                   mapping_key=mapping_key, 
+                                   processed_rows=len(results))
+                    
+                except Exception as e:
+                    self.logger.error("Error executing init query", 
+                                    mapping_key=mapping_key, 
+                                    error=str(e))
+                    raise ETLException(f"Init query execution failed for {mapping_key}: {e}")
+                finally:
+                    # Close source connection
+                    self.database_service.close_connection(source_connection_name)
+            
+            self.logger.info("All init queries processed")
+            
+        except Exception as e:
+            self.logger.error("Error processing init queries", error=str(e))
+            raise ETLException(f"Init queries processing failed: {e}")
     
     def cleanup(self) -> None:
         """Cleanup resources"""

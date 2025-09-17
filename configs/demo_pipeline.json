@@ -36,6 +36,7 @@
   },
   "mapping":{
     "source1.users": {
+      "init_query": "SELECT * FROM users WHERE status = 'active' AND id > 2",
       "target_table": "target1.users",
       "primary_key": "id",
       "column_mapping": {

@@ -162,6 +162,37 @@ class DatabaseService:
                 logger = structlog.get_logger()
                 logger.error("Error closing connection", connection_name=connection_name, error=str(e))
     
+    def is_table_empty(self, table_name: str, connection_name: str = "default") -> bool:
+        """Check if table is empty"""
+        try:
+            with self.get_cursor(connection_name) as cursor:
+                cursor.execute(f"SELECT COUNT(*) FROM `{table_name}`")
+                result = cursor.fetchone()
+                return result[0] == 0
+        except Exception as e:
+            raise ConnectionError(f"Error checking if table '{table_name}' is empty: {e}")
+    
+    def execute_init_query(self, query: str, connection_name: str = "default") -> Tuple[list, list]:
+        """Execute init query and return results with column names"""
+        try:
+            with self.get_cursor(connection_name) as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                return results, columns
+        except Exception as e:
+            raise ConnectionError(f"Error executing init query: {e}")
+    
+    def get_table_columns(self, table_name: str, connection_name: str = "default") -> list:
+        """Get table column names"""
+        try:
+            with self.get_cursor(connection_name) as cursor:
+                cursor.execute(f"DESCRIBE `{table_name}`")
+                result = cursor.fetchall()
+                return [row[0] for row in result]
+        except Exception as e:
+            raise ConnectionError(f"Error getting columns for table '{table_name}': {e}")
+    
     def __del__(self):
         """Cleanup on destruction"""
         self.close_all_connections()

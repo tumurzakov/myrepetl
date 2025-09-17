@@ -218,7 +218,8 @@ class TestFullPipeline:
                     "id": ColumnMapping(column="id", primary_key=True),
                     "name": ColumnMapping(column="name"),
                     "email": ColumnMapping(column="email")
-                }
+                },
+                filter=None
             )
             
             mock_transform_service.return_value.apply_column_transforms.return_value = {
@@ -231,9 +232,11 @@ class TestFullPipeline:
             service.replication_service = mock_replication_service.return_value
             service.transform_service = mock_transform_service.return_value
             service.database_service = mock_db_service.return_value
+            service.filter_service = Mock()
             service.config = Mock()
             service.config.sources = {"source1": Mock()}
             service.config.replication = Mock()
+            service.config.mapping = {}
             service.config.parse_target_table.return_value = ("target1", "users")
             
             service.run_replication()
