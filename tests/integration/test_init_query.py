@@ -122,13 +122,17 @@ class TestInitQuery:
         # Create ETL service
         etl_service = ETLService()
         etl_service.config = config
-        etl_service.database_service = mock_db_service
-        etl_service.transform_service = Mock()
-        etl_service.filter_service = Mock()
-        etl_service.filter_service.apply_filter.return_value = True
-        etl_service.transform_service.apply_column_transforms.return_value = {
+        
+        # Mock thread manager
+        mock_thread_manager = Mock()
+        mock_thread_manager.database_service = mock_db_service
+        mock_thread_manager.transform_service = Mock()
+        mock_thread_manager.filter_service = Mock()
+        mock_thread_manager.filter_service.apply_filter.return_value = True
+        mock_thread_manager.transform_service.apply_column_transforms.return_value = {
             'id': 1, 'name': 'John'
         }
+        etl_service.thread_manager = mock_thread_manager
         
         # Execute init queries
         etl_service.execute_init_queries()
@@ -187,9 +191,13 @@ class TestInitQuery:
         # Create ETL service
         etl_service = ETLService()
         etl_service.config = config
-        etl_service.database_service = mock_db_service
-        etl_service.transform_service = Mock()
-        etl_service.filter_service = Mock()
+        
+        # Mock thread manager
+        mock_thread_manager = Mock()
+        mock_thread_manager.database_service = mock_db_service
+        mock_thread_manager.transform_service = Mock()
+        mock_thread_manager.filter_service = Mock()
+        etl_service.thread_manager = mock_thread_manager
         
         # Execute init queries
         etl_service.execute_init_queries()
@@ -255,16 +263,20 @@ class TestInitQuery:
         # Create ETL service
         etl_service = ETLService()
         etl_service.config = config
-        etl_service.database_service = mock_db_service
-        etl_service.transform_service = Mock()
-        etl_service.filter_service = Mock()
+        
+        # Mock thread manager
+        mock_thread_manager = Mock()
+        mock_thread_manager.database_service = mock_db_service
+        mock_thread_manager.transform_service = Mock()
+        mock_thread_manager.filter_service = Mock()
+        etl_service.thread_manager = mock_thread_manager
         
         # Mock filter service to filter out inactive users
         def mock_apply_filter(row, filter_config):
             return row.get('status') == 'active'
         
-        etl_service.filter_service.apply_filter.side_effect = mock_apply_filter
-        etl_service.transform_service.apply_column_transforms.return_value = {
+        mock_thread_manager.filter_service.apply_filter.side_effect = mock_apply_filter
+        mock_thread_manager.transform_service.apply_column_transforms.return_value = {
             'id': 1, 'name': 'John', 'status': 'active'
         }
         

@@ -1,0 +1,467 @@
+"""
+Unit tests for TargetThreadService
+"""
+
+import pytest
+import threading
+import time
+from unittest.mock import Mock, patch, MagicMock
+
+from src.services.target_thread_service import TargetThread, TargetThreadService
+from src.models.config import DatabaseConfig, ETLConfig
+from src.models.events import InsertEvent, EventType
+from src.services.message_bus import Message, MessageType
+
+
+class TestTargetThread:
+    """Test TargetThread"""
+    
+    def test_target_thread_initialization(self):
+        """Test target thread initialization"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        assert thread.target_name == "test_target"
+        assert thread.target_config == target_config
+        assert thread.message_bus == message_bus
+        assert thread.database_service == database_service
+        assert thread.transform_service == transform_service
+        assert thread.filter_service == filter_service
+        assert thread.config == config
+        assert not thread.is_running()
+    
+    def test_start_stop_thread(self):
+        """Test starting and stopping thread"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Start thread
+        thread.start()
+        time.sleep(0.1)  # Give thread time to start
+        
+        assert thread.is_running()
+        
+        # Stop thread
+        thread.stop()
+        time.sleep(0.1)  # Give thread time to stop
+        
+        assert not thread.is_running()
+    
+    def test_get_stats(self):
+        """Test getting thread statistics"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        stats = thread.get_stats()
+        
+        assert 'events_processed' in stats
+        assert 'inserts_processed' in stats
+        assert 'updates_processed' in stats
+        assert 'deletes_processed' in stats
+        assert 'errors_count' in stats
+        assert 'last_event_time' in stats
+        assert 'is_running' in stats
+        assert 'queue_size' in stats
+        assert stats['is_running'] is False
+    
+    def test_handle_binlog_event_message(self):
+        """Test handling binlog event message"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Create test event
+        event = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test"},
+            source_name="test_source"
+        )
+        
+        # Create message
+        message = Message(
+            message_type=MessageType.BINLOG_EVENT,
+            source="test_source",
+            target="test_target",
+            data=event
+        )
+        
+        # Handle message
+        thread._handle_binlog_event(message)
+        
+        # Check that event was added to queue
+        assert thread._event_queue.qsize() == 1
+    
+    def test_handle_binlog_event_message_wrong_target(self):
+        """Test handling binlog event message for different target"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Create test event
+        event = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test"},
+            source_name="test_source"
+        )
+        
+        # Create message for different target
+        message = Message(
+            message_type=MessageType.BINLOG_EVENT,
+            source="test_source",
+            target="other_target",
+            data=event
+        )
+        
+        # Handle message
+        thread._handle_binlog_event(message)
+        
+        # Check that event was not added to queue
+        assert thread._event_queue.qsize() == 0
+    
+    def test_handle_shutdown_message(self):
+        """Test handling shutdown message"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Create shutdown message
+        message = Message(
+            message_type=MessageType.SHUTDOWN,
+            source="test_source",
+            data="Shutdown requested"
+        )
+        
+        # Handle message
+        thread._handle_shutdown(message)
+        
+        # Check that shutdown was requested
+        assert thread._shutdown_requested is True
+
+
+class TestTargetThreadService:
+    """Test TargetThreadService"""
+    
+    def test_target_thread_service_initialization(self):
+        """Test target thread service initialization"""
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        
+        service = TargetThreadService(
+            message_bus, database_service, transform_service, filter_service
+        )
+        
+        assert service.message_bus == message_bus
+        assert service.database_service == database_service
+        assert service.transform_service == transform_service
+        assert service.filter_service == filter_service
+        assert len(service._target_threads) == 0
+    
+    def test_start_target(self):
+        """Test starting a target thread"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread = Mock()
+            mock_target_thread_class.return_value = mock_thread
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            target_config = Mock(spec=DatabaseConfig)
+            config = Mock(spec=ETLConfig)
+            
+            service.start_target("test_target", target_config, config)
+            
+            assert "test_target" in service._target_threads
+            mock_target_thread_class.assert_called_once_with(
+                target_name="test_target",
+                target_config=target_config,
+                message_bus=message_bus,
+                database_service=database_service,
+                transform_service=transform_service,
+                filter_service=filter_service,
+                config=config
+            )
+            mock_thread.start.assert_called_once()
+    
+    def test_start_target_already_exists(self):
+        """Test starting a target thread that already exists"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread = Mock()
+            mock_target_thread_class.return_value = mock_thread
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add existing thread
+            service._target_threads["test_target"] = mock_thread
+            
+            target_config = Mock(spec=DatabaseConfig)
+            config = Mock(spec=ETLConfig)
+            
+            # Should not create new thread
+            service.start_target("test_target", target_config, config)
+            
+            # Should not call start again
+            assert mock_thread.start.call_count == 0
+    
+    def test_stop_target(self):
+        """Test stopping a target thread"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread = Mock()
+            mock_target_thread_class.return_value = mock_thread
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add thread
+            service._target_threads["test_target"] = mock_thread
+            
+            service.stop_target("test_target")
+            
+            mock_thread.stop.assert_called_once()
+            assert "test_target" not in service._target_threads
+    
+    def test_stop_target_not_found(self):
+        """Test stopping a target thread that doesn't exist"""
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        service = TargetThreadService(
+            message_bus, database_service, transform_service, filter_service
+        )
+        
+        # Should not raise exception
+        service.stop_target("nonexistent_target")
+    
+    def test_stop_all_targets(self):
+        """Test stopping all target threads"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread1 = Mock()
+            mock_thread2 = Mock()
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add threads
+            service._target_threads["target1"] = mock_thread1
+            service._target_threads["target2"] = mock_thread2
+            
+            service.stop_all_targets()
+            
+            mock_thread1.stop.assert_called_once()
+            mock_thread2.stop.assert_called_once()
+            assert len(service._target_threads) == 0
+    
+    def test_get_target_stats(self):
+        """Test getting target statistics"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread = Mock()
+            mock_thread.get_stats.return_value = {"events_processed": 10, "is_running": True}
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add thread
+            service._target_threads["test_target"] = mock_thread
+            
+            stats = service.get_target_stats("test_target")
+            
+            assert stats == {"events_processed": 10, "is_running": True}
+            mock_thread.get_stats.assert_called_once()
+    
+    def test_get_target_stats_not_found(self):
+        """Test getting statistics for non-existent target"""
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        service = TargetThreadService(
+            message_bus, database_service, transform_service, filter_service
+        )
+        
+        stats = service.get_target_stats("nonexistent_target")
+        
+        assert stats is None
+    
+    def test_get_all_stats(self):
+        """Test getting statistics for all targets"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread1 = Mock()
+            mock_thread1.get_stats.return_value = {"events_processed": 10}
+            mock_thread2 = Mock()
+            mock_thread2.get_stats.return_value = {"events_processed": 20}
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add threads
+            service._target_threads["target1"] = mock_thread1
+            service._target_threads["target2"] = mock_thread2
+            
+            stats = service.get_all_stats()
+            
+            assert "target1" in stats
+            assert "target2" in stats
+            assert stats["target1"]["events_processed"] == 10
+            assert stats["target2"]["events_processed"] == 20
+    
+    def test_is_target_running(self):
+        """Test checking if target is running"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread = Mock()
+            mock_thread.is_running.return_value = True
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add thread
+            service._target_threads["test_target"] = mock_thread
+            
+            assert service.is_target_running("test_target") is True
+            assert service.is_target_running("nonexistent_target") is False
+    
+    def test_get_running_targets(self):
+        """Test getting list of running targets"""
+        with patch('src.services.target_thread_service.TargetThread') as mock_target_thread_class:
+            mock_thread1 = Mock()
+            mock_thread1.is_running.return_value = True
+            mock_thread2 = Mock()
+            mock_thread2.is_running.return_value = False
+            
+            message_bus = Mock()
+            database_service = Mock()
+            transform_service = Mock()
+            filter_service = Mock()
+            service = TargetThreadService(
+                message_bus, database_service, transform_service, filter_service
+            )
+            
+            # Add threads
+            service._target_threads["target1"] = mock_thread1
+            service._target_threads["target2"] = mock_thread2
+            
+            running_targets = service.get_running_targets()
+            
+            assert "target1" in running_targets
+            assert "target2" not in running_targets
+

@@ -5,11 +5,14 @@ Main ETL service for MySQL Replication ETL
 from typing import Optional
 import os
 import structlog
+import signal
+import sys
 
 from .exceptions import ETLException
 from .models.config import ETLConfig
 from .models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent
 from .services import ConfigService, DatabaseService, TransformService, ReplicationService, FilterService
+from .services.thread_manager import ThreadManager
 from .utils import SQLBuilder, retry_on_connection_error, retry_on_transform_error
 
 
@@ -19,19 +22,28 @@ class ETLService:
     def __init__(self):
         self.logger = structlog.get_logger()
         self.config_service = ConfigService()
-        self.database_service = DatabaseService()
-        self.transform_service = TransformService()
-        self.filter_service = FilterService()
-        self.replication_service: Optional[ReplicationService] = None
+        self.thread_manager: Optional[ThreadManager] = None
         self.config: Optional[ETLConfig] = None
         self._shutdown_requested = False
+        
+        # Setup signal handlers for graceful shutdown
+        self._setup_signal_handlers()
+    
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful shutdown"""
+        def signal_handler(signum, frame):
+            self.logger.info("Received signal, initiating shutdown", signal=signum)
+            self.request_shutdown()
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
     
     def request_shutdown(self) -> None:
         """Запрос на остановку сервиса"""
         self.logger.info("Shutdown requested")
         self._shutdown_requested = True
-        if self.replication_service:
-            self.replication_service.request_shutdown()
+        if self.thread_manager:
+            self.thread_manager.stop()
     
     def initialize(self, config_path: str) -> None:
         """Initialize ETL service with configuration"""
@@ -43,15 +55,8 @@ class ETLService:
             if not self.config_service.validate_config(self.config):
                 raise ETLException("Invalid configuration")
             
-            # Load transform module from config directory
-            config_dir = os.path.dirname(os.path.abspath(config_path))
-            self.logger.debug("Loading transform module", 
-                            config_path=config_path, 
-                            config_dir=config_dir)
-            self.transform_service.load_transform_module(config_dir=config_dir)
-            
-            # Initialize replication service
-            self.replication_service = ReplicationService(self.database_service)
+            # Initialize thread manager
+            self.thread_manager = ThreadManager()
             
             self.logger.info("ETL service initialized", config_path=config_path)
             
@@ -59,30 +64,24 @@ class ETLService:
             self.logger.error("Failed to initialize ETL service", error=str(e))
             raise ETLException(f"Initialization failed: {e}")
     
-    @retry_on_connection_error(max_attempts=3)
-    def connect_to_targets(self) -> None:
-        """Connect to all target databases"""
-        try:
-            for target_name, target_config in self.config.targets.items():
-                self.database_service.connect(target_config, target_name)
-                self.logger.info("Connected to target database", target_name=target_name)
-        except Exception as e:
-            self.logger.error("Failed to connect to target databases", error=str(e))
-            raise ETLException(f"Target connection failed: {e}")
-    
     def test_connections(self) -> bool:
         """Test all source and target connections"""
         try:
+            if not self.thread_manager:
+                raise ETLException("Thread manager not initialized")
+            
+            database_service = self.thread_manager.database_service
+            
             # Test all source connections
             for source_name, source_config in self.config.sources.items():
-                source_ok = self.database_service.test_connection(source_config)
+                source_ok = database_service.test_connection(source_config)
                 if not source_ok:
                     self.logger.error("Source connection test failed", source_name=source_name)
                     return False
             
             # Test all target connections
             for target_name, target_config in self.config.targets.items():
-                target_ok = self.database_service.test_connection(target_config)
+                target_ok = database_service.test_connection(target_config)
                 if not target_ok:
                     self.logger.error("Target connection test failed", target_name=target_name)
                     return False
@@ -94,268 +93,61 @@ class ETLService:
             self.logger.error("Connection test failed", error=str(e))
             return False
     
-    def process_event(self, event: BinlogEvent) -> None:
-        """Process a single binlog event"""
-        try:
-            # Get table mapping
-            table_mapping = self.replication_service.get_table_mapping(
-                self.config, event.schema, event.table, event.source_name
-            )
-            
-            if not table_mapping:
-                self.logger.debug("No mapping found for table", 
-                                schema=event.schema, table=event.table, source_name=event.source_name)
-                return
-            
-            # Parse target table to get target name and table name
-            target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
-            
-            # Process based on event type
-            if isinstance(event, InsertEvent):
-                self._process_insert_event(event, table_mapping, target_name, target_table_name)
-            elif isinstance(event, UpdateEvent):
-                self._process_update_event(event, table_mapping, target_name, target_table_name)
-            elif isinstance(event, DeleteEvent):
-                self._process_delete_event(event, table_mapping, target_name, target_table_name)
-            else:
-                self.logger.debug("Unhandled event type", 
-                                event_type=type(event).__name__)
-                
-        except Exception as e:
-            # Log error but continue processing - data will be updated later
-            self.logger.warning("Error processing event (ignoring, will retry later)", 
-                            error=str(e), 
-                            schema=event.schema, 
-                            table=event.table,
-                            source_name=event.source_name)
-            # Don't raise exception - just continue with next event
     
-    def _process_insert_event(self, event: InsertEvent, table_mapping, target_name: str, target_table_name: str) -> None:
-        """Process INSERT event"""
-        try:
-            self.logger.info("Processing INSERT event", 
-                            table=event.table, 
-                            schema=event.schema,
-                            source_name=event.source_name,
-                            target_name=target_name)
-            
-            # Apply filters if configured
-            if table_mapping.filter:
-                if not self.filter_service.apply_filter(event.values, table_mapping.filter):
-                    self.logger.debug("INSERT event filtered out", 
-                                    table=event.table, 
-                                    schema=event.schema,
-                                    source_name=event.source_name,
-                                    filter=table_mapping.filter)
-                    return
-            
-            # Apply transformations
-            source_table = f"{event.schema}.{event.table}"
-            transformed_data = self.transform_service.apply_column_transforms(
-                event.values, table_mapping.column_mapping, source_table
-            )
-            
-            # Build and execute UPSERT
-            sql, values = SQLBuilder.build_upsert_sql(
-                target_table_name,
-                transformed_data,
-                table_mapping.primary_key
-            )
-            
-            self.database_service.execute_update(sql, values, target_name)
-            self.logger.info("INSERT processed successfully", 
-                            original=event.values, 
-                            transformed=transformed_data,
-                            target_name=target_name)
-        except Exception as e:
-            # Log error but continue processing - data will be updated later
-            self.logger.warning("Error processing INSERT event (ignoring, will retry later)", 
-                            error=str(e), 
-                            table=event.table, 
-                            schema=event.schema,
-                            source_name=event.source_name,
-                            target_name=target_name)
-    
-    def _process_update_event(self, event: UpdateEvent, table_mapping, target_name: str, target_table_name: str) -> None:
-        """Process UPDATE event"""
-        try:
-            self.logger.info("Processing UPDATE event", 
-                            table=event.table, 
-                            schema=event.schema,
-                            source_name=event.source_name,
-                            target_name=target_name)
-            
-            # Apply filters if configured (check both before and after values)
-            if table_mapping.filter:
-                # Check if after_values pass the filter
-                after_passes_filter = self.filter_service.apply_filter(event.after_values, table_mapping.filter)
-                # Check if before_values passed the filter
-                before_passed_filter = self.filter_service.apply_filter(event.before_values, table_mapping.filter)
-                
-                if not after_passes_filter and not before_passed_filter:
-                    # Both before and after don't pass filter, skip
-                    self.logger.debug("UPDATE event filtered out (both before and after)", 
-                                    table=event.table, 
-                                    schema=event.schema,
-                                    source_name=event.source_name,
-                                    filter=table_mapping.filter)
-                    return
-                elif not after_passes_filter and before_passed_filter:
-                    # Record was previously included but now excluded, delete it
-                    self.logger.debug("UPDATE event: record now filtered out, deleting", 
-                                    table=event.table, 
-                                    schema=event.schema,
-                                    source_name=event.source_name,
-                                    filter=table_mapping.filter)
-                    source_table = f"{event.schema}.{event.table}"
-                    self._delete_filtered_record(event.before_values, table_mapping, target_name, target_table_name, source_table)
-                    return
-            
-            # Apply transformations to after_values
-            source_table = f"{event.schema}.{event.table}"
-            transformed_data = self.transform_service.apply_column_transforms(
-                event.after_values, table_mapping.column_mapping, source_table
-            )
-            
-            # Build and execute UPSERT
-            sql, values = SQLBuilder.build_upsert_sql(
-                target_table_name,
-                transformed_data,
-                table_mapping.primary_key
-            )
-            
-            self.database_service.execute_update(sql, values, target_name)
-            self.logger.info("UPDATE processed successfully", 
-                            before=event.before_values,
-                            after=event.after_values, 
-                            transformed=transformed_data,
-                            target_name=target_name)
-        except Exception as e:
-            # Log error but continue processing - data will be updated later
-            self.logger.warning("Error processing UPDATE event (ignoring, will retry later)", 
-                            error=str(e), 
-                            table=event.table, 
-                            schema=event.schema,
-                            source_name=event.source_name,
-                            target_name=target_name)
-    
-    def _process_delete_event(self, event: DeleteEvent, table_mapping, target_name: str, target_table_name: str) -> None:
-        """Process DELETE event"""
-        try:
-            self.logger.info("Processing DELETE event", 
-                            table=event.table, 
-                            schema=event.schema,
-                            source_name=event.source_name,
-                            target_name=target_name)
-            
-            # Apply filters if configured
-            if table_mapping.filter:
-                if not self.filter_service.apply_filter(event.values, table_mapping.filter):
-                    self.logger.debug("DELETE event filtered out", 
-                                    table=event.table, 
-                                    schema=event.schema,
-                                    source_name=event.source_name,
-                                    filter=table_mapping.filter)
-                    return
-            
-            # Apply transformations to get primary key
-            source_table = f"{event.schema}.{event.table}"
-            transformed_data = self.transform_service.apply_column_transforms(
-                event.values, table_mapping.column_mapping, source_table
-            )
-            
-            # Build and execute DELETE
-            sql, values = SQLBuilder.build_delete_sql(
-                target_table_name,
-                transformed_data,
-                table_mapping.primary_key
-            )
-            
-            self.database_service.execute_update(sql, values, target_name)
-            self.logger.info("DELETE processed successfully", 
-                            data=event.values, 
-                            transformed=transformed_data,
-                            target_name=target_name)
-        except Exception as e:
-            # Log error but continue processing - data will be updated later
-            self.logger.warning("Error processing DELETE event (ignoring, will retry later)", 
-                            error=str(e), 
-                            table=event.table, 
-                            schema=event.schema,
-                            source_name=event.source_name,
-                            target_name=target_name)
-    
-    def _delete_filtered_record(self, values: dict, table_mapping, target_name: str, target_table_name: str, source_table: str) -> None:
-        """Delete a record that was previously included but now filtered out"""
-        try:
-            # Apply transformations to get primary key
-            transformed_data = self.transform_service.apply_column_transforms(
-                values, table_mapping.column_mapping, source_table
-            )
-            
-            # Build and execute DELETE
-            sql, values = SQLBuilder.build_delete_sql(
-                target_table_name,
-                transformed_data,
-                table_mapping.primary_key
-            )
-            
-            self.database_service.execute_update(sql, values, target_name)
-            self.logger.info("Filtered record deleted successfully", 
-                            data=values, 
-                            transformed=transformed_data,
-                            target_name=target_name)
-        except Exception as e:
-            # Log error but continue processing - data will be updated later
-            self.logger.warning("Error deleting filtered record (ignoring, will retry later)", 
-                            error=str(e), 
-                            data=values,
-                            target_name=target_name)
     
     def run_replication(self) -> None:
-        """Run the replication process"""
+        """Run the replication process using multithreaded architecture"""
         try:
-            # Connect to all targets
-            self.connect_to_targets()
+            if not self.thread_manager:
+                raise ETLException("Thread manager not initialized")
+            
+            self.logger.info("Starting multithreaded replication process")
+            
+            # Start all services and threads
+            self.thread_manager.start(self.config)
             
             # Execute init queries for empty target tables
             self.execute_init_queries()
             
-            # Connect to replication streams for all sources
-            for source_name, source_config in self.config.sources.items():
-                # Get tables for this source from pipeline configuration
-                tables = self.config.get_tables_for_source(source_name)
-                self.logger.info("Tables configured for source", 
-                               source_name=source_name, 
-                               tables=[f"{schema}.{table}" for schema, table in tables])
-                
-                self.replication_service.connect_to_replication(
-                    source_name, source_config, self.config.replication, tables
-                )
-                self.logger.info("Connected to replication stream", source_name=source_name)
+            self.logger.info("Replication process started successfully")
             
-            self.logger.info("Starting replication process")
-            
-            # Process events from all sources
-            for source_name, event in self.replication_service.get_all_events():
-                # Проверяем флаг остановки перед обработкой каждого события
-                if self._shutdown_requested:
-                    self.logger.info("Shutdown requested, stopping event processing")
-                    break
+            # Wait for shutdown signal
+            while not self._shutdown_requested and self.thread_manager.is_running():
+                try:
+                    # Check status periodically
+                    stats = self.thread_manager.get_stats()
+                    self.logger.debug("Service status", 
+                                    status=stats.status.value,
+                                    uptime=stats.uptime,
+                                    events_processed=stats.total_events_processed)
                     
-                self.process_event(event)
-                
-        except KeyboardInterrupt:
-            self.logger.info("Replication stopped by user")
+                    # Sleep for a short time to avoid busy waiting
+                    import time
+                    time.sleep(1.0)
+                    
+                except KeyboardInterrupt:
+                    self.logger.info("Replication stopped by user")
+                    break
+                except Exception as e:
+                    self.logger.error("Error in main loop", error=str(e))
+                    break
+            
         except Exception as e:
-            # Log error but continue processing - individual events will be handled separately
-            self.logger.warning("Replication error (continuing, individual events will be handled separately)", error=str(e))
+            self.logger.error("Replication error", error=str(e))
+            raise
         finally:
             self.cleanup()
     
     def execute_init_queries(self) -> None:
         """Execute init queries for empty target tables"""
         try:
+            if not self.thread_manager:
+                raise ETLException("Thread manager not initialized")
+            
+            database_service = self.thread_manager.database_service
+            transform_service = self.thread_manager.transform_service
+            filter_service = self.thread_manager.filter_service
+            
             self.logger.info("Checking for init queries to execute")
             
             for mapping_key, table_mapping in self.config.mapping.items():
@@ -366,7 +158,7 @@ class ETLService:
                 target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
                 
                 # Check if target table is empty
-                if not self.database_service.is_table_empty(target_table_name, target_name):
+                if not database_service.is_table_empty(target_table_name, target_name):
                     self.logger.debug("Target table not empty, skipping init query", 
                                     mapping_key=mapping_key, 
                                     target_table=table_mapping.target_table)
@@ -409,10 +201,10 @@ class ETLService:
                 
                 try:
                     # Connect to source database
-                    self.database_service.connect(source_config, source_connection_name)
+                    database_service.connect(source_config, source_connection_name)
                     
                     # Execute init query
-                    results, columns = self.database_service.execute_init_query(
+                    results, columns = database_service.execute_init_query(
                         table_mapping.init_query, source_connection_name
                     )
                     
@@ -427,7 +219,7 @@ class ETLService:
                         
                         # Apply filters if configured
                         if table_mapping.filter:
-                            if not self.filter_service.apply_filter(row_dict, table_mapping.filter):
+                            if not filter_service.apply_filter(row_dict, table_mapping.filter):
                                 self.logger.debug("Init query row filtered out", 
                                                 mapping_key=mapping_key, 
                                                 row=row_dict)
@@ -435,7 +227,7 @@ class ETLService:
                         
                         # Apply transformations
                         source_table = mapping_key  # mapping_key is already in format "source_name.table_name"
-                        transformed_data = self.transform_service.apply_column_transforms(
+                        transformed_data = transform_service.apply_column_transforms(
                             row_dict, table_mapping.column_mapping, source_table
                         )
                         
@@ -447,7 +239,7 @@ class ETLService:
                         )
                         
                         try:
-                            self.database_service.execute_update(sql, values, target_name)
+                            database_service.execute_update(sql, values, target_name)
                             self.logger.debug("Init query row processed successfully", 
                                             mapping_key=mapping_key, 
                                             original=row_dict, 
@@ -470,10 +262,13 @@ class ETLService:
                                     error=str(e))
                 finally:
                     # Close source connection
-                    self.database_service.close_connection(source_connection_name)
+                    database_service.close_connection(source_connection_name)
             
             self.logger.info("All init queries processed")
             
+        except ETLException as e:
+            # Re-raise ETLException (like thread manager not initialized)
+            raise
         except Exception as e:
             # Log error but continue processing - data will be updated later
             self.logger.warning("Error processing init queries (continuing, individual queries will be handled separately)", error=str(e))
@@ -486,20 +281,13 @@ class ETLService:
             # Устанавливаем флаг остановки
             self._shutdown_requested = True
             
-            # Закрываем replication service
-            if self.replication_service:
+            # Останавливаем thread manager
+            if self.thread_manager:
                 try:
-                    self.replication_service.close()
-                    self.logger.info("Replication service closed")
+                    self.thread_manager.stop()
+                    self.logger.info("Thread manager stopped")
                 except Exception as e:
-                    self.logger.error("Error closing replication service", error=str(e))
-            
-            # Закрываем все соединения с базой данных
-            try:
-                self.database_service.close_all_connections()
-                self.logger.info("Database connections closed")
-            except Exception as e:
-                self.logger.error("Error closing database connections", error=str(e))
+                    self.logger.error("Error stopping thread manager", error=str(e))
             
             self.logger.info("Cleanup completed successfully")
         except Exception as e:

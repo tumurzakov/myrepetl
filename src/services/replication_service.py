@@ -31,6 +31,10 @@ class ReplicationService:
     def connect_to_replication(self, source_name: str, source_config: DatabaseConfig, replication_config: ReplicationConfig, tables: List[Tuple[str, str]] = None) -> BinLogStreamReader:
         """Connect to MySQL replication stream for a specific source"""
         try:
+            # Get logger
+            import structlog
+            logger = structlog.get_logger()
+            
             # Get master status for starting position
             master_status = self.database_service.get_master_status(source_config)
             
@@ -51,6 +55,9 @@ class ReplicationService:
             ]
             
             # Configure table filters if tables are specified
+            only_tables = None
+            only_schemas = None
+            
             if tables:
                 only_tables = set()
                 only_schemas = set()
@@ -62,8 +69,6 @@ class ReplicationService:
                 only_schemas = list(only_schemas)
                 
                 # Log the filter parameters for debugging
-                import structlog
-                logger = structlog.get_logger()
                 logger.info("Configuring table filters for replication", 
                            source_name=source_name,
                            only_tables=only_tables,
