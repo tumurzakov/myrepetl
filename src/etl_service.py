@@ -93,6 +93,32 @@ class ETLService:
             self.logger.error("Connection test failed", error=str(e))
             return False
     
+    def _establish_target_connections(self) -> None:
+        """Establish target connections for init queries"""
+        try:
+            if not self.thread_manager:
+                raise ETLException("Thread manager not initialized")
+            
+            database_service = self.thread_manager.database_service
+            
+            self.logger.info("Establishing target connections for init queries")
+            
+            # Connect to all target databases
+            for target_name, target_config in self.config.targets.items():
+                try:
+                    database_service.connect(target_config, target_name)
+                    self.logger.info("Target connection established", target_name=target_name)
+                except Exception as e:
+                    self.logger.error("Failed to establish target connection", 
+                                    target_name=target_name, error=str(e))
+                    raise ETLException(f"Failed to establish target connection '{target_name}': {e}")
+            
+            self.logger.info("All target connections established successfully")
+            
+        except Exception as e:
+            self.logger.error("Error establishing target connections", error=str(e))
+            raise
+    
     
     
     def run_replication(self) -> None:
@@ -105,6 +131,9 @@ class ETLService:
             
             # Start all services and threads
             self.thread_manager.start(self.config)
+            
+            # Establish target connections for init queries
+            self._establish_target_connections()
             
             # Execute init queries for empty target tables
             self.execute_init_queries()
@@ -157,12 +186,19 @@ class ETLService:
                 # Parse target table to get target name and table name
                 target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
                 
-                # Check if target table is empty
-                if not database_service.is_table_empty(target_table_name, target_name):
-                    self.logger.debug("Target table not empty, skipping init query", 
-                                    mapping_key=mapping_key, 
-                                    target_table=table_mapping.target_table)
-                    continue
+                # Check if target table is empty (with error handling)
+                try:
+                    if not database_service.is_table_empty(target_table_name, target_name):
+                        self.logger.debug("Target table not empty, skipping init query", 
+                                        mapping_key=mapping_key, 
+                                        target_table=table_mapping.target_table)
+                        continue
+                except Exception as e:
+                    # If we can't check if table is empty, log warning and continue
+                    self.logger.warning("Could not check if target table is empty, proceeding with init query", 
+                                      mapping_key=mapping_key, 
+                                      target_table=table_mapping.target_table, 
+                                      error=str(e))
                 
                 self.logger.info("Executing init query for empty table", 
                                mapping_key=mapping_key, 
@@ -292,3 +328,8 @@ class ETLService:
             self.logger.info("Cleanup completed successfully")
         except Exception as e:
             self.logger.error("Cleanup error", error=str(e))
+            # Force cleanup even if there are errors
+            try:
+                self.logger.info("Force cleanup completed")
+            except Exception:
+                pass
