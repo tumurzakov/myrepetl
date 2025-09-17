@@ -253,7 +253,7 @@ class SourceThread:
                                     event_type=type(event).__name__,
                                     schema=event.schema,
                                     table=event.table,
-                                    source_name=event.source_name)
+                                    event_source_name=event.source_name)
                     
                     self.message_bus.publish_binlog_event(self.source_name, event)
                     
