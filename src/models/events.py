@@ -23,6 +23,9 @@ class BinlogEvent:
     event_type: EventType = None
     timestamp: Optional[int] = None
     source_name: Optional[str] = None
+    log_pos: Optional[int] = None
+    server_id: Optional[int] = None
+    event_id: Optional[str] = None
     
     def __post_init__(self):
         """Validate event after initialization"""
@@ -30,6 +33,11 @@ class BinlogEvent:
             raise ValueError("Schema is required")
         if not self.table:
             raise ValueError("Table is required")
+        
+        # Generate event ID if not provided
+        if not self.event_id:
+            import uuid
+            self.event_id = str(uuid.uuid4())[:8]
 
 
 @dataclass

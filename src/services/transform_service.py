@@ -126,7 +126,18 @@ class TransformService:
     
     def apply_column_transforms(self, row_data: Dict[str, Any], column_mapping: Dict[str, ColumnMapping], source_table: str = None) -> Dict[str, Any]:
         """Apply transformations to row data according to column mapping"""
+        import structlog
+        logger = structlog.get_logger()
+        
+        logger.info("Starting column transformations", 
+                   source_table=source_table,
+                   columns_count=len(column_mapping),
+                   row_keys=list(row_data.keys()) if row_data else [])
+        
         transformed_data = {}
+        transformation_count = 0
+        static_value_count = 0
+        copy_count = 0
         
         for source_col, target_config in column_mapping.items():
             try:
@@ -135,24 +146,65 @@ class TransformService:
                 if target_config.value is not None:
                     # Static value
                     transformed_data[target_col] = target_config.value
+                    static_value_count += 1
+                    logger.debug("Applied static value", 
+                               source_column=source_col,
+                               target_column=target_col,
+                               value=target_config.value)
                 elif target_config.transform:
                     # Apply transformation
                     transform_func = self.get_transform_function(target_config.transform)
                     if transform_func:
                         value = row_data.get(source_col)
+                        logger.debug("Applying transformation", 
+                                   source_column=source_col,
+                                   target_column=target_col,
+                                   transform=target_config.transform,
+                                   original_value=value)
+                        
                         transformed_value = transform_func(value, row_data, source_table)
                         transformed_data[target_col] = transformed_value
+                        transformation_count += 1
+                        
+                        logger.debug("Transformation completed", 
+                                   source_column=source_col,
+                                   target_column=target_col,
+                                   transform=target_config.transform,
+                                   original_value=value,
+                                   transformed_value=transformed_value)
                     else:
                         # Fallback to original value
                         transformed_data[target_col] = row_data.get(source_col)
+                        copy_count += 1
+                        logger.warning("Transform function not found, using original value", 
+                                     source_column=source_col,
+                                     target_column=target_col,
+                                     transform=target_config.transform)
                 else:
                     # Simple copy
                     transformed_data[target_col] = row_data.get(source_col)
+                    copy_count += 1
+                    logger.debug("Copied value", 
+                               source_column=source_col,
+                               target_column=target_col,
+                               value=row_data.get(source_col))
                     
             except Exception as e:
                 # Log error but continue with original value
                 transformed_data[target_col] = row_data.get(source_col)
+                logger.error("Error transforming column", 
+                           source_column=source_col,
+                           target_column=target_col,
+                           error=str(e),
+                           original_value=row_data.get(source_col))
                 raise TransformError(f"Error transforming column '{source_col}': {e}")
+        
+        logger.info("Column transformations completed", 
+                   source_table=source_table,
+                   transformations_applied=transformation_count,
+                   static_values_applied=static_value_count,
+                   values_copied=copy_count,
+                   result_keys=list(transformed_data.keys()))
         
         return transformed_data
     

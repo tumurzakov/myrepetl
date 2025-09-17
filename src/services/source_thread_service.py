@@ -236,19 +236,42 @@ class SourceThread:
                                    source_name=self.source_name)
                     break
                 
+                # Log raw binlog event details
+                self.logger.debug("Received binlog event", 
+                                source_name=self.source_name,
+                                event_type=type(binlog_event).__name__,
+                                schema=binlog_event.schema,
+                                table=binlog_event.table,
+                                timestamp=binlog_event.timestamp,
+                                log_pos=binlog_event.packet.log_pos)
+                
                 # Convert and publish event
                 event = self._convert_binlog_event(binlog_event)
                 if event:
+                    self.logger.debug("Event converted successfully", 
+                                    source_name=self.source_name,
+                                    event_type=type(event).__name__,
+                                    schema=event.schema,
+                                    table=event.table,
+                                    source_name=event.source_name)
+                    
                     self.message_bus.publish_binlog_event(self.source_name, event)
                     
                     with self._stats_lock:
                         self._stats['events_processed'] += 1
                         self._stats['last_event_time'] = time.time()
                     
-                    self.logger.debug("Event published", 
+                    self.logger.info("Event published to message bus", 
                                     source_name=self.source_name,
                                     event_type=type(event).__name__,
-                                    table=f"{event.schema}.{event.table}")
+                                    table=f"{event.schema}.{event.table}",
+                                    total_events=self._stats['events_processed'])
+                else:
+                    self.logger.warning("Failed to convert binlog event", 
+                                      source_name=self.source_name,
+                                      event_type=type(binlog_event).__name__,
+                                      schema=binlog_event.schema,
+                                      table=binlog_event.table)
                 
         except (ConnectionError, OSError, IOError) as e:
             # Handle connection-related errors gracefully
@@ -284,43 +307,100 @@ class SourceThread:
             schema = binlog_event.schema
             table = binlog_event.table
             
+            self.logger.debug("Converting binlog event", 
+                            source_name=self.source_name,
+                            event_type=type(binlog_event).__name__,
+                            schema=schema,
+                            table=table,
+                            rows_count=len(binlog_event.rows) if hasattr(binlog_event, 'rows') and binlog_event.rows else 0)
+            
             if isinstance(binlog_event, row_event.WriteRowsEvent):
+                values = binlog_event.rows[0]["values"] if binlog_event.rows else {}
+                self.logger.debug("Converting INSERT event", 
+                                source_name=self.source_name,
+                                schema=schema,
+                                table=table,
+                                values_count=len(values),
+                                values_keys=list(values.keys()) if values else [])
+                
                 return InsertEvent(
                     schema=schema,
                     table=table,
                     event_type=EventType.INSERT,
-                    values=binlog_event.rows[0]["values"] if binlog_event.rows else {},
-                    source_name=self.source_name
+                    values=values,
+                    source_name=self.source_name,
+                    timestamp=binlog_event.timestamp,
+                    log_pos=binlog_event.packet.log_pos,
+                    server_id=binlog_event.packet.server_id
                 )
             elif isinstance(binlog_event, row_event.UpdateRowsEvent):
                 row = binlog_event.rows[0] if binlog_event.rows else {}
+                before_values = row.get("before_values", {})
+                after_values = row.get("after_values", {})
+                
+                self.logger.debug("Converting UPDATE event", 
+                                source_name=self.source_name,
+                                schema=schema,
+                                table=table,
+                                before_values_count=len(before_values),
+                                after_values_count=len(after_values),
+                                before_keys=list(before_values.keys()) if before_values else [],
+                                after_keys=list(after_values.keys()) if after_values else [])
+                
                 return UpdateEvent(
                     schema=schema,
                     table=table,
                     event_type=EventType.UPDATE,
-                    before_values=row.get("before_values", {}),
-                    after_values=row.get("after_values", {}),
-                    source_name=self.source_name
+                    before_values=before_values,
+                    after_values=after_values,
+                    source_name=self.source_name,
+                    timestamp=binlog_event.timestamp,
+                    log_pos=binlog_event.packet.log_pos,
+                    server_id=binlog_event.packet.server_id
                 )
             elif isinstance(binlog_event, row_event.DeleteRowsEvent):
+                values = binlog_event.rows[0]["values"] if binlog_event.rows else {}
+                self.logger.debug("Converting DELETE event", 
+                                source_name=self.source_name,
+                                schema=schema,
+                                table=table,
+                                values_count=len(values),
+                                values_keys=list(values.keys()) if values else [])
+                
                 return DeleteEvent(
                     schema=schema,
                     table=table,
                     event_type=EventType.DELETE,
-                    values=binlog_event.rows[0]["values"] if binlog_event.rows else {},
-                    source_name=self.source_name
+                    values=values,
+                    source_name=self.source_name,
+                    timestamp=binlog_event.timestamp,
+                    log_pos=binlog_event.packet.log_pos,
+                    server_id=binlog_event.packet.server_id
                 )
             else:
                 # Generic event for other types
+                self.logger.debug("Converting OTHER event", 
+                                source_name=self.source_name,
+                                schema=schema,
+                                table=table,
+                                event_type=type(binlog_event).__name__)
+                
                 return BinlogEvent(
                     schema=schema,
                     table=table,
                     event_type=EventType.OTHER,
-                    source_name=self.source_name
+                    source_name=self.source_name,
+                    timestamp=binlog_event.timestamp,
+                    log_pos=binlog_event.packet.log_pos,
+                    server_id=binlog_event.packet.server_id
                 )
         except Exception as e:
             self.logger.error("Error converting binlog event", 
-                            source_name=self.source_name, error=str(e))
+                            source_name=self.source_name, 
+                            event_type=type(binlog_event).__name__,
+                            schema=getattr(binlog_event, 'schema', 'unknown'),
+                            table=getattr(binlog_event, 'table', 'unknown'),
+                            error=str(e))
             return None
     
     def _is_shutdown_requested(self) -> bool:

@@ -265,69 +265,137 @@ class TargetThread:
     
     def _process_insert_event(self, event: InsertEvent, table_mapping, target_table_name: str) -> None:
         """Process INSERT event"""
+        import uuid
+        operation_id = str(uuid.uuid4())[:8]
+        
         try:
             self.logger.info("Processing INSERT event", 
+                            operation_id=operation_id,
+                            event_id=event.event_id,
                             table=event.table, 
                             schema=event.schema,
                             source_name=event.source_name,
-                            target_name=self.target_name)
+                            target_name=self.target_name,
+                            timestamp=event.timestamp,
+                            log_pos=event.log_pos,
+                            server_id=event.server_id,
+                            original_data=event.values)
             
             # Apply filters if configured
             if table_mapping.filter:
+                self.logger.debug("Applying filter to INSERT event", 
+                                operation_id=operation_id,
+                                filter=table_mapping.filter,
+                                data=event.values)
+                
                 if not self.filter_service.apply_filter(event.values, table_mapping.filter):
-                    self.logger.debug("INSERT event filtered out", 
+                    self.logger.info("INSERT event filtered out", 
+                                    operation_id=operation_id,
                                     table=event.table, 
                                     schema=event.schema,
                                     source_name=event.source_name,
                                     target_name=self.target_name,
                                     filter=table_mapping.filter)
                     return
+                
+                self.logger.debug("INSERT event passed filter", 
+                                operation_id=operation_id,
+                                filter=table_mapping.filter)
             
             # Apply transformations
             source_table = f"{event.schema}.{event.table}"
+            self.logger.debug("Starting data transformation for INSERT", 
+                            operation_id=operation_id,
+                            source_table=source_table,
+                            column_mapping=len(table_mapping.column_mapping))
+            
             transformed_data = self.transform_service.apply_column_transforms(
                 event.values, table_mapping.column_mapping, source_table
             )
             
+            self.logger.debug("Data transformation completed for INSERT", 
+                            operation_id=operation_id,
+                            original_keys=list(event.values.keys()),
+                            transformed_keys=list(transformed_data.keys()))
+            
             # Build and execute UPSERT
+            self.logger.debug("Building UPSERT SQL for INSERT", 
+                            operation_id=operation_id,
+                            target_table=target_table_name,
+                            primary_key=table_mapping.primary_key)
+            
             sql, values = SQLBuilder.build_upsert_sql(
                 target_table_name,
                 transformed_data,
                 table_mapping.primary_key
             )
             
-            self.database_service.execute_update(sql, values, self.target_name)
+            self.logger.info("Executing UPSERT for INSERT", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(values),
+                            target_name=self.target_name)
+            
+            result = self.database_service.execute_update(sql, values, self.target_name)
+            
             self.logger.info("INSERT processed successfully", 
+                            operation_id=operation_id,
                             original=event.values, 
                             transformed=transformed_data,
+                            sql=sql,
+                            affected_rows=result.get('affected_rows', 0) if result else 0,
                             target_name=self.target_name)
         except Exception as e:
-            self.logger.warning("Error processing INSERT event (ignoring, will retry later)", 
+            self.logger.error("Error processing INSERT event", 
+                            operation_id=operation_id,
                             error=str(e), 
                             table=event.table, 
                             schema=event.schema,
                             source_name=event.source_name,
-                            target_name=self.target_name)
+                            target_name=self.target_name,
+                            original_data=event.values)
     
     def _process_update_event(self, event: UpdateEvent, table_mapping, target_table_name: str) -> None:
         """Process UPDATE event"""
+        import uuid
+        operation_id = str(uuid.uuid4())[:8]
+        
         try:
             self.logger.info("Processing UPDATE event", 
+                            operation_id=operation_id,
+                            event_id=event.event_id,
                             table=event.table, 
                             schema=event.schema,
                             source_name=event.source_name,
-                            target_name=self.target_name)
+                            target_name=self.target_name,
+                            timestamp=event.timestamp,
+                            log_pos=event.log_pos,
+                            server_id=event.server_id,
+                            before_data=event.before_values,
+                            after_data=event.after_values)
             
             # Apply filters if configured (check both before and after values)
             if table_mapping.filter:
+                self.logger.debug("Applying filter to UPDATE event", 
+                                operation_id=operation_id,
+                                filter=table_mapping.filter,
+                                before_data=event.before_values,
+                                after_data=event.after_values)
+                
                 # Check if after_values pass the filter
                 after_passes_filter = self.filter_service.apply_filter(event.after_values, table_mapping.filter)
                 # Check if before_values passed the filter
                 before_passed_filter = self.filter_service.apply_filter(event.before_values, table_mapping.filter)
                 
+                self.logger.debug("Filter results for UPDATE", 
+                                operation_id=operation_id,
+                                before_passed_filter=before_passed_filter,
+                                after_passes_filter=after_passes_filter)
+                
                 if not after_passes_filter and not before_passed_filter:
                     # Both before and after don't pass filter, skip
-                    self.logger.debug("UPDATE event filtered out (both before and after)", 
+                    self.logger.info("UPDATE event filtered out (both before and after)", 
+                                    operation_id=operation_id,
                                     table=event.table, 
                                     schema=event.schema,
                                     source_name=event.source_name,
@@ -336,111 +404,227 @@ class TargetThread:
                     return
                 elif not after_passes_filter and before_passed_filter:
                     # Record was previously included but now excluded, delete it
-                    self.logger.debug("UPDATE event: record now filtered out, deleting", 
+                    self.logger.info("UPDATE event: record now filtered out, deleting", 
+                                    operation_id=operation_id,
                                     table=event.table, 
                                     schema=event.schema,
                                     source_name=event.source_name,
                                     target_name=self.target_name,
                                     filter=table_mapping.filter)
                     source_table = f"{event.schema}.{event.table}"
-                    self._delete_filtered_record(event.before_values, table_mapping, target_table_name, source_table)
+                    self._delete_filtered_record(event.before_values, table_mapping, target_table_name, source_table, operation_id)
                     return
+                
+                self.logger.debug("UPDATE event passed filter", 
+                                operation_id=operation_id,
+                                filter=table_mapping.filter)
             
             # Apply transformations to after_values
             source_table = f"{event.schema}.{event.table}"
+            self.logger.debug("Starting data transformation for UPDATE", 
+                            operation_id=operation_id,
+                            source_table=source_table,
+                            column_mapping=len(table_mapping.column_mapping))
+            
             transformed_data = self.transform_service.apply_column_transforms(
                 event.after_values, table_mapping.column_mapping, source_table
             )
             
+            self.logger.debug("Data transformation completed for UPDATE", 
+                            operation_id=operation_id,
+                            before_keys=list(event.before_values.keys()),
+                            after_keys=list(event.after_values.keys()),
+                            transformed_keys=list(transformed_data.keys()))
+            
             # Build and execute UPSERT
+            self.logger.debug("Building UPSERT SQL for UPDATE", 
+                            operation_id=operation_id,
+                            target_table=target_table_name,
+                            primary_key=table_mapping.primary_key)
+            
             sql, values = SQLBuilder.build_upsert_sql(
                 target_table_name,
                 transformed_data,
                 table_mapping.primary_key
             )
             
-            self.database_service.execute_update(sql, values, self.target_name)
+            self.logger.info("Executing UPSERT for UPDATE", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(values),
+                            target_name=self.target_name)
+            
+            result = self.database_service.execute_update(sql, values, self.target_name)
+            
             self.logger.info("UPDATE processed successfully", 
+                            operation_id=operation_id,
                             before=event.before_values,
                             after=event.after_values, 
                             transformed=transformed_data,
+                            sql=sql,
+                            affected_rows=result.get('affected_rows', 0) if result else 0,
                             target_name=self.target_name)
         except Exception as e:
-            self.logger.warning("Error processing UPDATE event (ignoring, will retry later)", 
+            self.logger.error("Error processing UPDATE event", 
+                            operation_id=operation_id,
                             error=str(e), 
                             table=event.table, 
                             schema=event.schema,
                             source_name=event.source_name,
-                            target_name=self.target_name)
+                            target_name=self.target_name,
+                            before_data=event.before_values,
+                            after_data=event.after_values)
     
     def _process_delete_event(self, event: DeleteEvent, table_mapping, target_table_name: str) -> None:
         """Process DELETE event"""
+        import uuid
+        operation_id = str(uuid.uuid4())[:8]
+        
         try:
             self.logger.info("Processing DELETE event", 
+                            operation_id=operation_id,
+                            event_id=event.event_id,
                             table=event.table, 
                             schema=event.schema,
                             source_name=event.source_name,
-                            target_name=self.target_name)
+                            target_name=self.target_name,
+                            timestamp=event.timestamp,
+                            log_pos=event.log_pos,
+                            server_id=event.server_id,
+                            data=event.values)
             
             # Apply filters if configured
             if table_mapping.filter:
+                self.logger.debug("Applying filter to DELETE event", 
+                                operation_id=operation_id,
+                                filter=table_mapping.filter,
+                                data=event.values)
+                
                 if not self.filter_service.apply_filter(event.values, table_mapping.filter):
-                    self.logger.debug("DELETE event filtered out", 
+                    self.logger.info("DELETE event filtered out", 
+                                    operation_id=operation_id,
                                     table=event.table, 
                                     schema=event.schema,
                                     source_name=event.source_name,
                                     target_name=self.target_name,
                                     filter=table_mapping.filter)
                     return
+                
+                self.logger.debug("DELETE event passed filter", 
+                                operation_id=operation_id,
+                                filter=table_mapping.filter)
             
             # Apply transformations to get primary key
             source_table = f"{event.schema}.{event.table}"
+            self.logger.debug("Starting data transformation for DELETE", 
+                            operation_id=operation_id,
+                            source_table=source_table,
+                            column_mapping=len(table_mapping.column_mapping))
+            
             transformed_data = self.transform_service.apply_column_transforms(
                 event.values, table_mapping.column_mapping, source_table
             )
             
+            self.logger.debug("Data transformation completed for DELETE", 
+                            operation_id=operation_id,
+                            original_keys=list(event.values.keys()),
+                            transformed_keys=list(transformed_data.keys()))
+            
             # Build and execute DELETE
+            self.logger.debug("Building DELETE SQL", 
+                            operation_id=operation_id,
+                            target_table=target_table_name,
+                            primary_key=table_mapping.primary_key)
+            
             sql, values = SQLBuilder.build_delete_sql(
                 target_table_name,
                 transformed_data,
                 table_mapping.primary_key
             )
             
-            self.database_service.execute_update(sql, values, self.target_name)
+            self.logger.info("Executing DELETE", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(values),
+                            target_name=self.target_name)
+            
+            result = self.database_service.execute_update(sql, values, self.target_name)
+            
             self.logger.info("DELETE processed successfully", 
+                            operation_id=operation_id,
                             data=event.values, 
                             transformed=transformed_data,
+                            sql=sql,
+                            affected_rows=result.get('affected_rows', 0) if result else 0,
                             target_name=self.target_name)
         except Exception as e:
-            self.logger.warning("Error processing DELETE event (ignoring, will retry later)", 
+            self.logger.error("Error processing DELETE event", 
+                            operation_id=operation_id,
                             error=str(e), 
                             table=event.table, 
                             schema=event.schema,
                             source_name=event.source_name,
-                            target_name=self.target_name)
+                            target_name=self.target_name,
+                            data=event.values)
     
-    def _delete_filtered_record(self, values: dict, table_mapping, target_table_name: str, source_table: str) -> None:
+    def _delete_filtered_record(self, values: dict, table_mapping, target_table_name: str, source_table: str, operation_id: str = None) -> None:
         """Delete a record that was previously included but now filtered out"""
+        if not operation_id:
+            import uuid
+            operation_id = str(uuid.uuid4())[:8]
+        
         try:
+            self.logger.info("Deleting filtered record", 
+                            operation_id=operation_id,
+                            data=values,
+                            target_table=target_table_name,
+                            target_name=self.target_name)
+            
             # Apply transformations to get primary key
+            self.logger.debug("Starting data transformation for filtered record deletion", 
+                            operation_id=operation_id,
+                            source_table=source_table,
+                            column_mapping=len(table_mapping.column_mapping))
+            
             transformed_data = self.transform_service.apply_column_transforms(
                 values, table_mapping.column_mapping, source_table
             )
             
+            self.logger.debug("Data transformation completed for filtered record deletion", 
+                            operation_id=operation_id,
+                            original_keys=list(values.keys()),
+                            transformed_keys=list(transformed_data.keys()))
+            
             # Build and execute DELETE
-            sql, values = SQLBuilder.build_delete_sql(
+            self.logger.debug("Building DELETE SQL for filtered record", 
+                            operation_id=operation_id,
+                            target_table=target_table_name,
+                            primary_key=table_mapping.primary_key)
+            
+            sql, delete_values = SQLBuilder.build_delete_sql(
                 target_table_name,
                 transformed_data,
                 table_mapping.primary_key
             )
             
-            self.database_service.execute_update(sql, values, self.target_name)
+            self.logger.info("Executing DELETE for filtered record", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(delete_values),
+                            target_name=self.target_name)
+            
+            result = self.database_service.execute_update(sql, delete_values, self.target_name)
+            
             self.logger.info("Filtered record deleted successfully", 
+                            operation_id=operation_id,
                             data=values, 
                             transformed=transformed_data,
+                            sql=sql,
+                            affected_rows=result.get('affected_rows', 0) if result else 0,
                             target_name=self.target_name)
         except Exception as e:
-            self.logger.warning("Error deleting filtered record (ignoring, will retry later)", 
+            self.logger.error("Error deleting filtered record", 
+                            operation_id=operation_id,
                             error=str(e), 
                             data=values,
                             target_name=self.target_name)
