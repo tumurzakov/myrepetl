@@ -158,22 +158,40 @@ class ThreadManager:
         
         try:
             # Stop source threads
-            self.source_thread_service.stop_all_sources()
+            try:
+                self.source_thread_service.stop_all_sources()
+            except Exception as e:
+                self.logger.error("Error stopping source threads", error=str(e))
             
             # Stop target threads
-            self.target_thread_service.stop_all_targets()
+            try:
+                self.target_thread_service.stop_all_targets()
+            except Exception as e:
+                self.logger.error("Error stopping target threads", error=str(e))
             
             # Publish shutdown message to wake up any waiting threads
-            self.message_bus.publish_shutdown("thread_manager")
+            try:
+                self.message_bus.publish_shutdown("thread_manager")
+            except Exception as e:
+                self.logger.error("Error publishing shutdown message", error=str(e))
             
             # Stop message bus processing
-            self._stop_message_bus_processing()
+            try:
+                self._stop_message_bus_processing()
+            except Exception as e:
+                self.logger.error("Error stopping message bus processing", error=str(e))
             
             # Stop monitoring
-            self._stop_monitoring()
+            try:
+                self._stop_monitoring()
+            except Exception as e:
+                self.logger.error("Error stopping monitoring", error=str(e))
             
             # Close database connections
-            self.database_service.close_all_connections()
+            try:
+                self.database_service.close_all_connections()
+            except Exception as e:
+                self.logger.error("Error closing database connections", error=str(e))
             
             with self._status_lock:
                 self._status = ServiceStatus.STOPPED
@@ -282,6 +300,8 @@ class ThreadManager:
         try:
             while not self._is_shutdown_requested():
                 self.message_bus.process_messages(timeout=1.0)
+                # Small sleep to prevent busy loop when no messages
+                time.sleep(0.01)
         except Exception as e:
             self.logger.error("Error in message bus worker", error=str(e))
     

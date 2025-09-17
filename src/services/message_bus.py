@@ -187,8 +187,8 @@ class MessageBus:
                         self._stats['messages_processed'] += 1
                         
                 except queue.Empty:
-                    # Timeout reached, break to avoid infinite loop in tests
-                    break
+                    # Timeout reached, continue to check shutdown
+                    continue
                     
         except Exception as e:
             self.logger.error("Error processing messages", error=str(e))
