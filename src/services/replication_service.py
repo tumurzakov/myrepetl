@@ -151,11 +151,7 @@ class ReplicationService:
                                    event_type=type(binlog_event).__name__,
                                    event_count=event_count)
                         yield source_name, self._convert_binlog_event(binlog_event, source_name)
-                    else:
-                        # No event available, log periodically
-                        if event_count == 0 and current_source_index == 0:
-                            logger.debug("No events available, waiting...", 
-                                       source_name=source_name)
+
                 except Exception as e:
                     if "no more data" in str(e).lower() or "no data" in str(e).lower():
                         # No more events from this source, continue to next
