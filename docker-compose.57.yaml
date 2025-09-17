@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Source MySQL database
   mysql-source:
-    image: mysql:8.0
+    image: mysql:5.7
     container_name: etl-mysql-source
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
@@ -17,17 +17,14 @@ services:
       --server-id=1
       --log-bin=mysql-bin
       --binlog-format=ROW
-      --binlog-row-metadata=FULL
-      --binlog-row-image=FULL
       --gtid-mode=ON
+      --binlog-row-image=FULL
       --enforce-gtid-consistency=ON
-    ports:
-      - "3306:3306"
     networks:
       - etl-network
 
   mysql-other:
-    image: mysql:8.0
+    image: mysql:5.7
     container_name: etl-mysql-other
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
@@ -41,12 +38,9 @@ services:
       --server-id=2
       --log-bin=mysql-bin
       --binlog-format=ROW
-      --binlog-row-metadata=FULL
       --binlog-row-image=FULL
       --gtid-mode=ON
       --enforce-gtid-consistency=ON
-    ports:
-      - "3308:3306"
     networks:
       - etl-network
 
@@ -59,8 +53,6 @@ services:
       MYSQL_DATABASE: target_db
       MYSQL_USER: target_user
       MYSQL_PASSWORD: target_password
-    ports:
-      - "3307:3306"
     volumes:
       - mysql_target_data:/var/lib/mysql
       - ./kube/target_init.sql:/docker-entrypoint-initdb.d/target_init.sql

@@ -22,12 +22,45 @@ myrepetl --help
 
 Подробные инструкции по установке см. в [INSTALL.md](INSTALL.md).
 
+## Пользовательские трансформации
+
+Система поддерживает пользовательские функции трансформации данных. Создайте файл `transform.py` в той же директории, где находится ваш конфигурационный файл:
+
+```python
+from datetime import datetime
+
+def to_date(ts: int) -> str:
+    """Convert timestamp to date string"""
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+def uppercase(value):
+    """Convert string to uppercase"""
+    if value is None:
+        return None
+    elif isinstance(value, str):
+        return value.upper()
+    else:
+        return value
+```
+
+Используйте в конфигурации:
+```json
+{
+  "column_mapping": {
+    "modified": {"column": "modify_time", "transform": "transform.to_date"},
+    "name": {"column": "name", "transform": "transform.uppercase"}
+  }
+}
+```
+
+Подробная документация по трансформациям доступна в [TRANSFORMS.md](TRANSFORMS.md).
+
 ## Возможности
 
 - **Репликация в реальном времени**: Чтение binlog событий MySQL
 - **Множественные источники**: Поддержка нескольких источников данных одновременно
 - **Множественные приемники**: Возможность репликации в несколько целевых баз данных
-- **Гибкие трансформации**: Поддержка пользовательских функций трансформации
+- **Гибкие трансформации**: Поддержка пользовательских функций трансформации с автоматической загрузкой модулей
 - **Конфигурируемые mapping'и**: Настройка соответствия таблиц и колонок
 - **Инициализация данных**: Автоматическая загрузка исторических данных через init_query
 - **Фильтрация данных**: Гибкая система фильтрации с поддержкой сложных условий
@@ -669,13 +702,13 @@ myrepetl/
 │   ├── models/            # Модели данных
 │   ├── services/          # Бизнес-логика
 │   ├── utils/             # Утилиты
+│   ├── cli.py             # CLI интерфейс
+│   ├── etl_service.py     # Основной ETL сервис
 │   ├── exceptions.py      # Исключения
-│   └── etl_service.py     # Основной сервис
+│   └── transform.py       # Функции трансформации
 ├── tests/                 # Тесты
 │   ├── unit/              # Unit тесты
 │   └── integration/       # Интеграционные тесты
-├── cli.py                 # CLI интерфейс
-├── transform.py           # Функции трансформации
 ├── configs/               # Конфигурационные файлы
 ├── kube/                  # Kubernetes манифесты
 ├── docker-compose.yml     # Docker Compose конфигурация

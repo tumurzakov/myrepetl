@@ -56,12 +56,9 @@ myrepetl test config.json
 ## Зависимости
 
 Пакет автоматически установит следующие зависимости:
-- pymysql
-- cryptography
-- mysql-replication
-- pandas
-- numpy
-- pyyaml
-- python-dotenv
-- click
-- structlog
+- pymysql - для подключения к MySQL
+- mysql-replication - для чтения binlog событий
+- pyyaml - для парсинга конфигурации
+- structlog - для структурированного логирования
+
+**Оптимизация зависимостей**: Проект использует только необходимые пакеты для ускорения сборки и уменьшения размера образа.

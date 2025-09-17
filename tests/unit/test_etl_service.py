@@ -122,7 +122,7 @@ class TestETLService:
             mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock(), "name": Mock()}
-            mock_table_mapping.filter = None
+            mock_table_mapping.filter = None  # No filter for this test
             
             mock_config = Mock()
             mock_config.parse_target_table.return_value = ("target1", "users")
@@ -168,7 +168,7 @@ class TestETLService:
             mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock(), "name": Mock()}
-            mock_table_mapping.filter = None
+            mock_table_mapping.filter = None  # No filter for this test
             
             mock_config = Mock()
             mock_config.parse_target_table.return_value = ("target1", "users")
@@ -217,7 +217,7 @@ class TestETLService:
             mock_table_mapping.target_table = "target1.users"
             mock_table_mapping.primary_key = "id"
             mock_table_mapping.column_mapping = {"id": Mock()}
-            mock_table_mapping.filter = None
+            mock_table_mapping.filter = None  # No filter for this test
             
             mock_config = Mock()
             mock_config.parse_target_table.return_value = ("target1", "users")
