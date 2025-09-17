@@ -2,6 +2,7 @@
 Replication service for MySQL Replication ETL
 """
 
+import os
 from typing import Dict, Any, Optional, Generator, Tuple, List
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication import row_event
@@ -53,15 +54,19 @@ class ReplicationService:
             only_tables = None
             only_schemas = None
             if tables:
-                only_tables = {}
-                schemas = set()
-                for schema, table in tables:
-                    if schema not in only_tables:
-                        only_tables[schema] = []
-                    only_tables[schema].append(table)
-                    schemas.add(schema)
+                # Check if filtering should be disabled for debugging
+                disable_filtering = os.environ.get('DISABLE_TABLE_FILTERING', 'false').lower() == 'true'
                 
-                only_schemas = list(schemas)
+                if not disable_filtering:
+                    only_tables = {}
+                    schemas = set()
+                    for schema, table in tables:
+                        if schema not in only_tables:
+                            only_tables[schema] = []
+                        only_tables[schema].append(table)
+                        schemas.add(schema)
+                    
+                    only_schemas = list(schemas)
                 
                 # Log the filter parameters for debugging
                 import structlog
@@ -69,7 +74,8 @@ class ReplicationService:
                 logger.info("Configuring table filters for replication", 
                            source_name=source_name,
                            only_tables=only_tables,
-                           only_schemas=only_schemas)
+                           only_schemas=only_schemas,
+                           filtering_disabled=disable_filtering)
             
             # Create binlog stream
             stream = BinLogStreamReader(
@@ -83,6 +89,12 @@ class ReplicationService:
                 only_tables=only_tables,
                 only_schemas=only_schemas
             )
+            
+            # Log stream creation success
+            logger.info("BinLogStreamReader created successfully", 
+                       source_name=source_name,
+                       log_file=master_status.get('file'),
+                       log_pos=master_status.get('position', replication_config.log_pos))
             
             self._streams[source_name] = stream
             return stream
@@ -113,9 +125,16 @@ class ReplicationService:
         if not self._streams:
             raise ReplicationError("No replication streams connected")
         
+        # Log that we're starting to read events
+        import structlog
+        logger = structlog.get_logger()
+        logger.info("Starting to read binlog events", 
+                   sources=list(self._streams.keys()))
+        
         # Round-robin approach: process one event from each source in turn
         source_names = list(self._streams.keys())
         current_source_index = 0
+        event_count = 0
         
         while not self._shutdown_requested:
             try:
@@ -126,7 +145,17 @@ class ReplicationService:
                 try:
                     binlog_event = stream.fetchone()
                     if binlog_event is not None:
+                        event_count += 1
+                        logger.debug("Received binlog event", 
+                                   source_name=source_name,
+                                   event_type=type(binlog_event).__name__,
+                                   event_count=event_count)
                         yield source_name, self._convert_binlog_event(binlog_event, source_name)
+                    else:
+                        # No event available, log periodically
+                        if event_count == 0 and current_source_index == 0:
+                            logger.debug("No events available, waiting...", 
+                                       source_name=source_name)
                 except Exception as e:
                     if "no more data" in str(e).lower() or "no data" in str(e).lower():
                         # No more events from this source, continue to next
@@ -134,6 +163,9 @@ class ReplicationService:
                     elif self._shutdown_requested:
                         break
                     else:
+                        logger.error("Error reading binlog events", 
+                                   source_name=source_name, 
+                                   error=str(e))
                         raise ReplicationError(f"Error reading binlog events from source '{source_name}': {e}")
                 
                 # Move to next source
@@ -142,6 +174,7 @@ class ReplicationService:
             except Exception as e:
                 if self._shutdown_requested:
                     break
+                logger.error("Error in event processing loop", error=str(e))
                 raise ReplicationError(f"Error in event processing loop: {e}")
     
     def _convert_binlog_event(self, binlog_event, source_name: str) -> BinlogEvent:
