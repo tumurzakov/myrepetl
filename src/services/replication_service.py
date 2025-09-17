@@ -51,22 +51,15 @@ class ReplicationService:
             ]
             
             # Configure table filters if tables are specified
-            only_tables = None
-            only_schemas = None
             if tables:
-                # Check if filtering should be disabled for debugging
-                disable_filtering = os.environ.get('DISABLE_TABLE_FILTERING', 'false').lower() == 'true'
-                
-                if not disable_filtering:
-                    only_tables = {}
-                    schemas = set()
-                    for schema, table in tables:
-                        if schema not in only_tables:
-                            only_tables[schema] = []
-                        only_tables[schema].append(table)
-                        schemas.add(schema)
-                    
-                    only_schemas = list(schemas)
+                only_tables = set()
+                only_schemas = set()
+                for schema, table in tables:
+                    only_tables.add(table)
+                    only_schemas.add(schema)
+
+                only_tables = list(only_tables)
+                only_schemas = list(only_schemas)
                 
                 # Log the filter parameters for debugging
                 import structlog
@@ -74,8 +67,7 @@ class ReplicationService:
                 logger.info("Configuring table filters for replication", 
                            source_name=source_name,
                            only_tables=only_tables,
-                           only_schemas=only_schemas,
-                           filtering_disabled=disable_filtering)
+                           only_schemas=only_schemas)
             
             # Create binlog stream
             stream = BinLogStreamReader(
