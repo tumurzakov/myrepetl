@@ -158,14 +158,25 @@ class SourceThread:
                     master_status = self.database_service.get_master_status(self.source_config)
                     break
                 except Exception as e:
-                    if attempt == max_retries - 1:
-                        self.logger.error("Failed to get master status after all retries", 
-                                        source_name=self.source_name, error=str(e), attempts=max_retries)
-                        raise ReplicationError(f"Failed to get master status for source '{self.source_name}' after {max_retries} attempts: {e}")
+                    error_msg = str(e)
+                    if "read of closed file" in error_msg.lower():
+                        self.logger.warning("Connection closed during master status retrieval, retrying", 
+                                          source_name=self.source_name, error=error_msg, 
+                                          attempt=attempt + 1, max_retries=max_retries)
+                    elif "connection" in error_msg.lower():
+                        self.logger.warning("Connection error during master status retrieval, retrying", 
+                                          source_name=self.source_name, error=error_msg, 
+                                          attempt=attempt + 1, max_retries=max_retries)
                     else:
                         self.logger.warning("Failed to get master status, retrying", 
-                                          source_name=self.source_name, error=str(e), 
+                                          source_name=self.source_name, error=error_msg, 
                                           attempt=attempt + 1, max_retries=max_retries)
+                    
+                    if attempt == max_retries - 1:
+                        self.logger.error("Failed to get master status after all retries", 
+                                        source_name=self.source_name, error=error_msg, attempts=max_retries)
+                        raise ReplicationError(f"Failed to get master status for source '{self.source_name}' after {max_retries} attempts: {error_msg}")
+                    else:
                         time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
             
             # Prepare connection parameters

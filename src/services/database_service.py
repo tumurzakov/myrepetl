@@ -23,6 +23,13 @@ class DatabaseService:
         """Connect to database"""
         try:
             connection_params = config.to_connection_params()
+            # Add connection timeout and other robustness parameters
+            connection_params.update({
+                'connect_timeout': 10,
+                'read_timeout': 30,
+                'write_timeout': 30,
+                'autocommit': True
+            })
             connection = pymysql.connect(**connection_params)
             self._connections[connection_name] = connection
             self._connection_configs[connection_name] = config
@@ -58,11 +65,25 @@ class DatabaseService:
     def get_cursor(self, connection_name: str = "default"):
         """Get database cursor with automatic cleanup"""
         connection = self.get_connection(connection_name)
-        cursor = connection.cursor()
+        cursor = None
         try:
+            cursor = connection.cursor()
             yield cursor
+        except Exception as e:
+            # If cursor creation or usage fails, ensure we clean up
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+            raise
         finally:
-            cursor.close()
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception as e:
+                    self.logger.debug("Error closing cursor (expected during cleanup)", 
+                                    connection_name=connection_name, error=str(e))
     
     def execute_query(self, sql: str, values: Tuple = None, connection_name: str = "default") -> Any:
         """Execute query and return result"""
@@ -89,19 +110,13 @@ class DatabaseService:
     def get_master_status(self, config: DatabaseConfig) -> Dict[str, Any]:
         """Get MySQL master status"""
         connection_name = "master_status"
-        connection = None
         
         try:
             # Create a new connection specifically for this operation
             connection = self.connect(config, connection_name)
             
-            # Verify connection is still valid before using it
-            if not self.is_connected(connection_name):
-                raise ConnectionError("Connection is not valid")
-            
-            # Use the connection directly to avoid additional connection lookups
-            cursor = connection.cursor()
-            try:
+            # Use the connection with proper error handling
+            with self.get_cursor(connection_name) as cursor:
                 cursor.execute("SHOW MASTER STATUS")
                 result = cursor.fetchone()
                 
@@ -115,14 +130,6 @@ class DatabaseService:
                     }
                 else:
                     raise ConnectionError("Could not get master status")
-            finally:
-                # Ensure cursor is closed
-                try:
-                    if cursor:
-                        cursor.close()
-                except Exception as e:
-                    self.logger.debug("Error closing cursor (expected during cleanup)", 
-                                    connection_name=connection_name, error=str(e))
                     
         except Exception as e:
             self.logger.error("Error getting master status", error=str(e), connection_name=connection_name)
@@ -171,14 +178,11 @@ class DatabaseService:
             # Check if connection has a valid socket
             if hasattr(connection, '_sock') and connection._sock is None:
                 return False
-            # Test the connection with a simple ping
+            # Test the connection with a simple ping (with timeout)
             connection.ping(reconnect=False)
             return True
-        except (ConnectionError, OSError, IOError, AttributeError, pymysql.Error):
-            # These are expected when connection is closed
-            return False
-        except Exception:
-            # Any other exception means connection is not usable
+        except (ConnectionError, OSError, IOError, AttributeError, pymysql.Error, Exception):
+            # Any exception means connection is not usable
             return False
     
     def reconnect_if_needed(self, connection_name: str) -> None:
