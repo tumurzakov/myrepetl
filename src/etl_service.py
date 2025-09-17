@@ -290,8 +290,14 @@ class ETLService:
             
             # Connect to replication streams for all sources
             for source_name, source_config in self.config.sources.items():
+                # Get tables for this source from pipeline configuration
+                tables = self.config.get_tables_for_source(source_name)
+                self.logger.info("Tables configured for source", 
+                               source_name=source_name, 
+                               tables=[f"{schema}.{table}" for schema, table in tables])
+                
                 self.replication_service.connect_to_replication(
-                    source_name, source_config, self.config.replication
+                    source_name, source_config, self.config.replication, tables
                 )
                 self.logger.info("Connected to replication stream", source_name=source_name)
             

@@ -2,7 +2,7 @@
 Replication service for MySQL Replication ETL
 """
 
-from typing import Dict, Any, Optional, Generator, Tuple
+from typing import Dict, Any, Optional, Generator, Tuple, List
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication import row_event
 from pymysqlreplication.constants import BINLOG
@@ -27,7 +27,7 @@ class ReplicationService:
         # Закрываем все потоки
         self.close()
     
-    def connect_to_replication(self, source_name: str, source_config: DatabaseConfig, replication_config: ReplicationConfig) -> BinLogStreamReader:
+    def connect_to_replication(self, source_name: str, source_config: DatabaseConfig, replication_config: ReplicationConfig, tables: List[Tuple[str, str]] = None) -> BinLogStreamReader:
         """Connect to MySQL replication stream for a specific source"""
         try:
             # Get master status for starting position
@@ -49,6 +49,15 @@ class ReplicationService:
                 row_event.DeleteRowsEvent
             ]
             
+            # Configure table filters if tables are specified
+            only_tables = None
+            if tables:
+                only_tables = {}
+                for schema, table in tables:
+                    if schema not in only_tables:
+                        only_tables[schema] = []
+                    only_tables[schema].append(table)
+            
             # Create binlog stream
             stream = BinLogStreamReader(
                 connection_settings=connection_params,
@@ -57,7 +66,8 @@ class ReplicationService:
                 log_pos=master_status.get('position', replication_config.log_pos),
                 resume_stream=replication_config.resume_stream,
                 blocking=replication_config.blocking,
-                only_events=only_events
+                only_events=only_events,
+                only_tables=only_tables
             )
             
             self._streams[source_name] = stream

@@ -209,3 +209,32 @@ class ETLConfig:
             raise ConfigurationError(f"Source '{source_name}' not found in configuration")
         
         return source_name, table_name
+    
+    def get_tables_for_source(self, source_name: str) -> List[Tuple[str, str]]:
+        """Get list of (schema, table) tuples for a specific source"""
+        tables = []
+        
+        for mapping_key, table_mapping in self.mapping.items():
+            # Check if mapping has source_table field
+            if table_mapping.source_table:
+                try:
+                    mapping_source_name, table_name = self.parse_source_table(table_mapping.source_table)
+                    if mapping_source_name == source_name:
+                        # Get schema from source config
+                        source_config = self.get_source_config(source_name)
+                        schema = source_config.database
+                        tables.append((schema, table_name))
+                except Exception:
+                    # Skip invalid source_table format
+                    continue
+            else:
+                # Fallback to mapping key format (source_name.table_name)
+                if '.' in mapping_key:
+                    mapping_source_name, table_name = mapping_key.split('.', 1)
+                    if mapping_source_name == source_name:
+                        # Get schema from source config
+                        source_config = self.get_source_config(source_name)
+                        schema = source_config.database
+                        tables.append((schema, table_name))
+        
+        return tables
