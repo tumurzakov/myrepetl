@@ -36,6 +36,12 @@ class DatabaseService:
             raise ConnectionError(f"Connection '{connection_name}' not found")
         
         connection = self._connections[connection_name]
+        if connection is None:
+            # Clean up None connection
+            del self._connections[connection_name]
+            if connection_name in self._connection_configs:
+                del self._connection_configs[connection_name]
+            raise ConnectionError(f"Connection '{connection_name}' is None")
         
         # Check if connection is still valid
         if not self.is_connected(connection_name):
@@ -112,7 +118,8 @@ class DatabaseService:
             finally:
                 # Ensure cursor is closed
                 try:
-                    cursor.close()
+                    if cursor:
+                        cursor.close()
                 except Exception as e:
                     self.logger.debug("Error closing cursor (expected during cleanup)", 
                                     connection_name=connection_name, error=str(e))
@@ -152,8 +159,12 @@ class DatabaseService:
         """Check if connection is active"""
         if connection_name not in self._connections:
             return False
+        
+        connection = self._connections[connection_name]
+        if connection is None:
+            return False
+            
         try:
-            connection = self._connections[connection_name]
             # Check if connection is still open
             if hasattr(connection, 'open') and not connection.open:
                 return False
@@ -163,7 +174,7 @@ class DatabaseService:
             # Test the connection with a simple ping
             connection.ping(reconnect=False)
             return True
-        except (ConnectionError, OSError, IOError, AttributeError):
+        except (ConnectionError, OSError, IOError, AttributeError, pymysql.Error):
             # These are expected when connection is closed
             return False
         except Exception:
@@ -196,9 +207,12 @@ class DatabaseService:
                     # Try to rollback any pending transactions first
                     if hasattr(connection, 'rollback'):
                         try:
+                            # Check if connection is still valid before rollback
+                            if hasattr(connection, 'ping'):
+                                connection.ping(reconnect=False)
                             connection.rollback()
-                        except (ConnectionError, OSError, IOError, AttributeError):
-                            # These are expected when connection is already closed
+                        except (ConnectionError, OSError, IOError, AttributeError, pymysql.Error):
+                            # These are expected when connection is already closed or invalid
                             pass
                         except Exception as e:
                             self.logger.debug("Error during rollback (expected during cleanup)", 
@@ -210,7 +224,7 @@ class DatabaseService:
                 else:
                     self.logger.debug("Connection socket already closed", connection_name=connection_name)
                     
-        except (ConnectionError, OSError, IOError, AttributeError) as e:
+        except (ConnectionError, OSError, IOError, AttributeError, pymysql.Error) as e:
             # Connection errors during close are expected
             self.logger.debug("Connection error during close (expected)", 
                             connection_name=connection_name, error=str(e))

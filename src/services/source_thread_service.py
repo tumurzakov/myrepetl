@@ -83,7 +83,7 @@ class SourceThread:
                     # Check if stream is still valid before closing
                     if hasattr(self._stream, 'close') and not getattr(self._stream, '_closed', False):
                         self._stream.close()
-                except (ConnectionError, OSError, IOError) as e:
+                except (ConnectionError, OSError, IOError, AttributeError) as e:
                     # Connection errors during shutdown are expected
                     self.logger.debug("Connection error during stream close (expected during shutdown)", 
                                     source_name=self.source_name, error=str(e))
@@ -149,6 +149,12 @@ class SourceThread:
             
             for attempt in range(max_retries):
                 try:
+                    # Check if shutdown was requested before each retry
+                    if self._is_shutdown_requested():
+                        self.logger.info("Shutdown requested during master status retry, stopping", 
+                                       source_name=self.source_name)
+                        raise ReplicationError("Shutdown requested during master status retrieval")
+                    
                     master_status = self.database_service.get_master_status(self.source_config)
                     break
                 except Exception as e:
@@ -273,7 +279,7 @@ class SourceThread:
                                       schema=binlog_event.schema,
                                       table=binlog_event.table)
                 
-        except (ConnectionError, OSError, IOError) as e:
+        except (ConnectionError, OSError, IOError, AttributeError) as e:
             # Handle connection-related errors gracefully
             if self._is_shutdown_requested():
                 # If shutdown requested, don't raise exception
