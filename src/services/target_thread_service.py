@@ -205,8 +205,14 @@ class TargetThread:
                                 target_name=self.target_name)
                 return
             
-            # Parse target table to get target name and table name
-            target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
+            # Get target information from mapping
+            if table_mapping.target:
+                # New format: use target field
+                target_name = table_mapping.target
+                target_table_name = table_mapping.target_table
+            else:
+                # Legacy format: parse target_table
+                target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
             
             if target_name != self.target_name:
                 # Event is for a different target
@@ -246,14 +252,20 @@ class TargetThread:
     
     def _get_table_mapping(self, schema: str, table: str, source_name: str = None) -> Optional[Dict[str, Any]]:
         """Get table mapping configuration"""
-        # First try to find mapping by source_table field
+        # First try to find mapping using new method
+        if source_name:
+            mapping = self.config.get_mapping_by_source_and_table(source_name, schema, table)
+            if mapping:
+                return mapping
+        
+        # Fallback to old format: try by source_table field
         if source_name:
             source_table = f"{source_name}.{table}"
             mapping = self.config.get_mapping_by_source_table(source_table)
             if mapping:
                 return mapping
         
-        # Fallback to old format: mapping key (for backward compatibility)
+        # Fallback to mapping key (for backward compatibility)
         if source_name:
             mapping_key = f"{source_name}.{table}"
             if mapping_key in self.config.mapping:
@@ -343,7 +355,7 @@ class TargetThread:
                             original=event.values, 
                             transformed=transformed_data,
                             sql=sql,
-                            affected_rows=result.get('affected_rows', 0) if result else 0,
+                            affected_rows=result,
                             target_name=self.target_name)
         except Exception as e:
             self.logger.error("Error processing INSERT event", 
@@ -462,7 +474,7 @@ class TargetThread:
                             after=event.after_values, 
                             transformed=transformed_data,
                             sql=sql,
-                            affected_rows=result.get('affected_rows', 0) if result else 0,
+                            affected_rows=result,
                             target_name=self.target_name)
         except Exception as e:
             self.logger.error("Error processing UPDATE event", 
@@ -555,7 +567,7 @@ class TargetThread:
                             data=event.values, 
                             transformed=transformed_data,
                             sql=sql,
-                            affected_rows=result.get('affected_rows', 0) if result else 0,
+                            affected_rows=result,
                             target_name=self.target_name)
         except Exception as e:
             self.logger.error("Error processing DELETE event", 
@@ -620,7 +632,7 @@ class TargetThread:
                             data=values, 
                             transformed=transformed_data,
                             sql=sql,
-                            affected_rows=result.get('affected_rows', 0) if result else 0,
+                            affected_rows=result,
                             target_name=self.target_name)
         except Exception as e:
             self.logger.error("Error deleting filtered record", 
