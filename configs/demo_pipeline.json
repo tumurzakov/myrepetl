@@ -36,9 +36,10 @@
   },
   "mapping":{
     "source1.users": {
-      "init_query": "SELECT * FROM users WHERE status = 'active' AND id > 2",
-      "source_table": "source1.users",
-      "target_table": "target1.users",
+      "source": "source1",
+      "target": "target1",
+      "source_table": "users",
+      "target_table": "users",
       "primary_key": "id",
       "column_mapping": {
         "id": {"column": "id", "primary_key": true},
@@ -46,14 +47,13 @@
         "email": {"column": "email"},
         "status": {"column": "status"},
         "source_id": {"column": "source_id", "value": "1"}
-      },
-      "filter": {
-        "status": {"eq": "active"},
-        "id": {"gt": 2}
       }
     },
     "source2.users": {
-      "target_table": "target1.users",
+      "source": "source2",
+      "target": "target1",
+      "source_table": "users",
+      "target_table": "users",
       "primary_key": "id",
       "column_mapping": {
         "id": {"column": "id", "primary_key": true},

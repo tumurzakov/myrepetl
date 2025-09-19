@@ -76,22 +76,8 @@ class SourceThread:
         with self._shutdown_lock:
             self._shutdown_requested = True
         
-        # Close replication stream
-        with self._stream_lock:
-            if self._stream:
-                try:
-                    # Check if stream is still valid before closing
-                    if hasattr(self._stream, 'close') and not getattr(self._stream, '_closed', False):
-                        self._stream.close()
-                except (ConnectionError, OSError, IOError, AttributeError) as e:
-                    # Connection errors during shutdown are expected
-                    self.logger.debug("Connection error during stream close (expected during shutdown)", 
-                                    source_name=self.source_name, error=str(e))
-                except Exception as e:
-                    self.logger.error("Error closing replication stream", 
-                                    source_name=self.source_name, error=str(e))
-                finally:
-                    self._stream = None
+        # Cleanup replication stream
+        self._cleanup_stream()
         
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
@@ -116,36 +102,98 @@ class SourceThread:
             return self._stats.copy()
     
     def _run(self) -> None:
-        """Main thread loop"""
+        """Main thread loop with automatic reconnection"""
         try:
             with self._stats_lock:
                 self._stats['is_running'] = True
             
             self.logger.info("Source thread started processing", source_name=self.source_name)
             
-            # Connect to replication stream
-            self._connect_to_replication()
-            
-            # Process events
-            self._process_events()
+            # Main processing loop with automatic reconnection
+            while not self._is_shutdown_requested():
+                try:
+                    # Connect to replication stream
+                    self._connect_to_replication()
+                    
+                    # Process events (this will block until connection is lost or shutdown)
+                    self._process_events()
+                    
+                    # If we reach here, the connection was lost but not due to shutdown
+                    if not self._is_shutdown_requested():
+                        self.logger.warning("Connection lost, attempting to reconnect", 
+                                          source_name=self.source_name)
+                        self._cleanup_stream()
+                        
+                        # Wait before reconnecting to avoid rapid reconnection attempts
+                        time.sleep(5.0)
+                    
+                except ReplicationError as e:
+                    if self._is_shutdown_requested():
+                        # Shutdown requested, exit gracefully
+                        self.logger.info("Shutdown requested during replication error, stopping", 
+                                       source_name=self.source_name)
+                        break
+                    
+                    # Log the error and attempt reconnection
+                    self.logger.error("Replication error, attempting to reconnect", 
+                                    source_name=self.source_name, error=str(e))
+                    self.message_bus.publish_error(self.source_name, e)
+                    
+                    with self._stats_lock:
+                        self._stats['errors_count'] += 1
+                    
+                    # Cleanup and wait before reconnecting
+                    self._cleanup_stream()
+                    time.sleep(10.0)  # Wait longer after errors
+                    
+                except Exception as e:
+                    if self._is_shutdown_requested():
+                        # Shutdown requested, exit gracefully
+                        self.logger.info("Shutdown requested during exception, stopping", 
+                                       source_name=self.source_name)
+                        break
+                    
+                    # Check if this is a fatal error that should not be retried
+                    error_msg = str(e).lower()
+                    if any(keyword in error_msg for keyword in ['fatal', 'critical', 'permission denied', 'access denied']):
+                        self.logger.error("Fatal error in source thread, stopping reconnection attempts", 
+                                        source_name=self.source_name, error=str(e))
+                        self.message_bus.publish_error(self.source_name, e)
+                        break  # Exit the reconnection loop
+                    
+                    # Log the error and attempt reconnection
+                    self.logger.error("Unexpected error in source thread, attempting to reconnect", 
+                                    source_name=self.source_name, error=str(e))
+                    self.message_bus.publish_error(self.source_name, e)
+                    
+                    with self._stats_lock:
+                        self._stats['errors_count'] += 1
+                    
+                    # Cleanup and wait before reconnecting
+                    self._cleanup_stream()
+                    time.sleep(15.0)  # Wait longer after unexpected errors
             
         except Exception as e:
-            self.logger.error("Error in source thread", 
+            self.logger.error("Fatal error in source thread", 
                             source_name=self.source_name, error=str(e))
             self.message_bus.publish_error(self.source_name, e)
         finally:
+            # Cleanup stream
+            self._cleanup_stream()
+            
             with self._stats_lock:
                 self._stats['is_running'] = False
             
             self.logger.info("Source thread finished", source_name=self.source_name)
     
     def _connect_to_replication(self) -> None:
-        """Connect to MySQL replication stream"""
+        """Connect to MySQL replication stream with retry mechanism"""
         try:
             # Get master status for starting position with retry
             master_status = None
-            max_retries = 3
-            retry_delay = 1.0
+            max_retries = 5
+            base_delay = 2.0
+            max_delay = 60.0
             
             for attempt in range(max_retries):
                 try:
@@ -156,28 +204,52 @@ class SourceThread:
                         raise ReplicationError("Shutdown requested during master status retrieval")
                     
                     master_status = self.database_service.get_master_status(self.source_config)
+                    self.logger.info("Successfully retrieved master status", 
+                                   source_name=self.source_name, 
+                                   log_file=master_status.get('file'),
+                                   log_pos=master_status.get('position'),
+                                   binlog_enabled=master_status.get('binlog_enabled', 'unknown'))
+                    
+                    # Check if binlog is enabled
+                    if not master_status.get('file'):
+                        self.logger.warning("No binlog file found - binlog might not be enabled", 
+                                          source_name=self.source_name)
+                    
                     break
+                    
                 except Exception as e:
                     error_msg = str(e)
+                    
+                    # Calculate exponential backoff delay
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    
                     if "read of closed file" in error_msg.lower():
                         self.logger.warning("Connection closed during master status retrieval, retrying", 
                                           source_name=self.source_name, error=error_msg, 
-                                          attempt=attempt + 1, max_retries=max_retries)
+                                          attempt=attempt + 1, max_retries=max_retries, delay=delay)
                     elif "connection" in error_msg.lower():
                         self.logger.warning("Connection error during master status retrieval, retrying", 
                                           source_name=self.source_name, error=error_msg, 
-                                          attempt=attempt + 1, max_retries=max_retries)
+                                          attempt=attempt + 1, max_retries=max_retries, delay=delay)
                     else:
                         self.logger.warning("Failed to get master status, retrying", 
                                           source_name=self.source_name, error=error_msg, 
-                                          attempt=attempt + 1, max_retries=max_retries)
+                                          attempt=attempt + 1, max_retries=max_retries, delay=delay)
                     
                     if attempt == max_retries - 1:
                         self.logger.error("Failed to get master status after all retries", 
                                         source_name=self.source_name, error=error_msg, attempts=max_retries)
                         raise ReplicationError(f"Failed to get master status for source '{self.source_name}' after {max_retries} attempts: {error_msg}")
                     else:
-                        time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                        # Sleep with exponential backoff, but check for shutdown periodically
+                        sleep_interval = 0.5
+                        total_sleep = 0
+                        while total_sleep < delay and not self._is_shutdown_requested():
+                            time.sleep(sleep_interval)
+                            total_sleep += sleep_interval
+                        
+                        if self._is_shutdown_requested():
+                            raise ReplicationError("Shutdown requested during retry delay")
             
             # Prepare connection parameters
             connection_params = {
@@ -213,18 +285,27 @@ class SourceThread:
                                only_tables=only_tables,
                                only_schemas=only_schemas)
             
-            # Create binlog stream
-            stream = BinLogStreamReader(
-                connection_settings=connection_params,
-                server_id=self.replication_config.server_id,
-                log_file=master_status.get('file'),
-                log_pos=master_status.get('position', self.replication_config.log_pos),
-                resume_stream=self.replication_config.resume_stream,
-                blocking=self.replication_config.blocking,
-                only_events=only_events,
-                only_tables=only_tables,
-                only_schemas=only_schemas
-            )
+            # Create binlog stream with stable parameters
+            # Use unique server_id per source to avoid conflicts
+            unique_server_id = self.replication_config.server_id + hash(self.source_name) % 1000
+            
+            stream_params = {
+                'connection_settings': connection_params,
+                'server_id': unique_server_id,
+                'log_file': master_status.get('file'),
+                'log_pos': master_status.get('position', self.replication_config.log_pos),
+                'resume_stream': self.replication_config.resume_stream,
+                'blocking': True,  # Force blocking mode for continuous streaming
+                'only_events': only_events,
+                'only_tables': only_tables,
+                'only_schemas': only_schemas,
+            }
+            
+            self.logger.info("Creating BinLogStreamReader with parameters", 
+                           source_name=self.source_name,
+                           stream_params=stream_params)
+            
+            stream = BinLogStreamReader(**stream_params)
             
             with self._stream_lock:
                 self._stream = stream
@@ -232,7 +313,10 @@ class SourceThread:
             self.logger.info("Connected to replication stream", 
                            source_name=self.source_name,
                            log_file=master_status.get('file'),
-                           log_pos=master_status.get('position', self.replication_config.log_pos))
+                           log_pos=master_status.get('position', self.replication_config.log_pos),
+                           server_id=unique_server_id,
+                           blocking=True,
+                           resume_stream=self.replication_config.resume_stream)
             
         except Exception as e:
             raise ReplicationError(f"Failed to connect to replication for source '{self.source_name}': {e}")
@@ -245,8 +329,24 @@ class SourceThread:
             
             stream = self._stream
         
+        self.logger.info("Starting to process binlog events", source_name=self.source_name)
+        
         try:
+            event_count = 0
+            last_event_time = time.time()
+            
             for binlog_event in stream:
+                event_count += 1
+                
+                # Log first few events for debugging
+                if event_count <= 5:
+                    self.logger.info("Processing binlog event", 
+                                   source_name=self.source_name,
+                                   event_number=event_count,
+                                   event_type=type(binlog_event).__name__,
+                                   schema=getattr(binlog_event, 'schema', 'unknown'),
+                                   table=getattr(binlog_event, 'table', 'unknown'),
+                                   timestamp=getattr(binlog_event, 'timestamp', 'unknown'))
                 # Check shutdown flag
                 if self._is_shutdown_requested():
                     self.logger.info("Shutdown requested, stopping event processing", 
@@ -278,6 +378,8 @@ class SourceThread:
                         self._stats['events_processed'] += 1
                         self._stats['last_event_time'] = time.time()
                     
+                    last_event_time = time.time()
+                    
                     self.logger.info("Event published to message bus", 
                                     source_name=self.source_name,
                                     event_type=type(event).__name__,
@@ -289,6 +391,13 @@ class SourceThread:
                                       event_type=type(binlog_event).__name__,
                                       schema=binlog_event.schema,
                                       table=binlog_event.table)
+            
+            # If we reach here, the stream iteration ended
+            time_since_last_event = time.time() - last_event_time if event_count > 0 else 0
+            self.logger.warning("Binlog stream iteration ended unexpectedly", 
+                              source_name=self.source_name,
+                              total_events_processed=event_count,
+                              time_since_last_event=time_since_last_event)
                 
         except (ConnectionError, OSError, IOError, AttributeError) as e:
             # Handle connection-related errors gracefully
@@ -310,13 +419,26 @@ class SourceThread:
                 # If shutdown requested, don't raise exception
                 return
             
-            with self._stats_lock:
-                self._stats['errors_count'] += 1
-            
-            self.logger.error("Error reading binlog events", 
-                            source_name=self.source_name, error=str(e))
-            self.message_bus.publish_error(self.source_name, e)
-            raise ReplicationError(f"Error reading binlog events from source '{self.source_name}': {e}")
+            # Check if this is a recoverable error
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ['connection', 'timeout', 'network', 'broken pipe', 'connection reset']):
+                # Treat as connection error for reconnection
+                with self._stats_lock:
+                    self._stats['errors_count'] += 1
+                
+                self.logger.error("Recoverable error reading binlog events", 
+                                source_name=self.source_name, error=str(e))
+                self.message_bus.publish_error(self.source_name, e)
+                raise ReplicationError(f"Recoverable error reading binlog events from source '{self.source_name}': {e}")
+            else:
+                # Fatal error - should not be retried
+                with self._stats_lock:
+                    self._stats['errors_count'] += 1
+                
+                self.logger.error("Fatal error reading binlog events", 
+                                source_name=self.source_name, error=str(e))
+                self.message_bus.publish_error(self.source_name, e)
+                raise ReplicationError(f"Fatal error reading binlog events from source '{self.source_name}': {e}")
     
     def _convert_binlog_event(self, binlog_event) -> Optional[BinlogEvent]:
         """Convert pymysqlreplication event to our event model"""
@@ -419,6 +541,24 @@ class SourceThread:
                             table=getattr(binlog_event, 'table', 'unknown'),
                             error=str(e))
             return None
+    
+    def _cleanup_stream(self) -> None:
+        """Clean up the replication stream"""
+        with self._stream_lock:
+            if self._stream:
+                try:
+                    # Check if stream is still valid before closing
+                    if hasattr(self._stream, 'close') and not getattr(self._stream, '_closed', False):
+                        self._stream.close()
+                except (ConnectionError, OSError, IOError, AttributeError) as e:
+                    # Connection errors during cleanup are expected
+                    self.logger.debug("Connection error during stream cleanup (expected)", 
+                                    source_name=self.source_name, error=str(e))
+                except Exception as e:
+                    self.logger.error("Error during stream cleanup", 
+                                    source_name=self.source_name, error=str(e))
+                finally:
+                    self._stream = None
     
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""

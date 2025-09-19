@@ -68,6 +68,10 @@ class ThreadManager:
         self._shutdown_requested = False
         self._shutdown_lock = threading.Lock()
         
+        # Configuration storage for health monitoring
+        self._current_config: Optional[ETLConfig] = None
+        self._config_lock = threading.RLock()
+        
         # Message bus processing thread
         self._message_bus_thread: Optional[threading.Thread] = None
         self._message_bus_thread_lock = threading.Lock()
@@ -79,7 +83,7 @@ class ThreadManager:
         
         self.logger.info("Thread manager initialized")
     
-    def start(self, config: ETLConfig) -> None:
+    def start(self, config: ETLConfig, config_path: str = None) -> None:
         """Start all services and threads"""
         with self._status_lock:
             if self._status != ServiceStatus.STOPPED:
@@ -92,8 +96,12 @@ class ThreadManager:
         try:
             self.logger.info("Starting ETL services")
             
+            # Store configuration for health monitoring
+            with self._config_lock:
+                self._current_config = config
+            
             # Load transform module
-            self._load_transform_module(config)
+            self._load_transform_module(config, config_path)
             
             # Start message bus processing
             self._start_message_bus_processing()
@@ -196,6 +204,10 @@ class ThreadManager:
             with self._status_lock:
                 self._status = ServiceStatus.STOPPED
             
+            # Clear configuration
+            with self._config_lock:
+                self._current_config = None
+            
             self.logger.info("All ETL services stopped successfully")
             
         except Exception as e:
@@ -259,12 +271,19 @@ class ThreadManager:
         
         return True
     
-    def _load_transform_module(self, config: ETLConfig) -> None:
+    def _load_transform_module(self, config: ETLConfig, config_path: str = None) -> None:
         """Load transform module from config"""
         try:
-            # This would need to be implemented based on your config structure
-            # For now, we'll assume the transform service is already configured
-            self.logger.info("Transform module loaded")
+            # Get config directory from config path
+            config_dir = None
+            if config_path:
+                import os
+                config_dir = os.path.dirname(os.path.abspath(config_path))
+                self.logger.debug("Config directory determined", config_dir=config_dir)
+            
+            # Load transform module
+            self.transform_service.load_transform_module("transform", config_dir)
+            self.logger.info("Transform module loaded successfully", config_dir=config_dir)
         except Exception as e:
             self.logger.error("Failed to load transform module", error=str(e))
             raise
@@ -386,6 +405,9 @@ class ThreadManager:
                         self.logger.warning("Errors detected in service", 
                                           total_errors=stats.total_errors)
                     
+                    # Check source thread health and restart if needed
+                    self._check_source_thread_health()
+                    
                     # Sleep for monitoring interval
                     time.sleep(self._monitoring_interval)
                     
@@ -395,6 +417,68 @@ class ThreadManager:
                     
         except Exception as e:
             self.logger.error("Fatal error in monitoring worker", error=str(e))
+    
+    def _check_source_thread_health(self) -> None:
+        """Check source thread health and restart failed threads"""
+        try:
+            with self._config_lock:
+                if not self._current_config:
+                    return
+            
+                config = self._current_config
+            
+            # Get current source thread stats
+            source_stats = self.source_thread_service.get_all_stats()
+            
+            for source_name, stats in source_stats.items():
+                # Check if thread is not running but should be
+                if not stats.get('is_running', False):
+                    self.logger.warning("Source thread not running, attempting to restart", 
+                                      source_name=source_name)
+                    
+                    try:
+                        # Get source configuration
+                        if source_name not in config.sources:
+                            self.logger.error("Source configuration not found for restart", 
+                                            source_name=source_name)
+                            continue
+                        
+                        source_config = config.sources[source_name]
+                        tables = config.get_tables_for_source(source_name)
+                        
+                        # Stop the failed thread if it still exists
+                        self.source_thread_service.stop_source(source_name)
+                        
+                        # Wait a moment before restarting
+                        time.sleep(2.0)
+                        
+                        # Restart the source thread
+                        self.source_thread_service.start_source(
+                            source_name, source_config, config.replication, tables
+                        )
+                        
+                        self.logger.info("Source thread restarted successfully", 
+                                       source_name=source_name)
+                        
+                    except Exception as e:
+                        self.logger.error("Failed to restart source thread", 
+                                        source_name=source_name, error=str(e))
+                
+                # Check for high error rates
+                errors_count = stats.get('errors_count', 0)
+                events_processed = stats.get('events_processed', 0)
+                
+                if events_processed > 0 and errors_count > 0:
+                    error_rate = errors_count / events_processed
+                    if error_rate > 0.1:  # More than 10% error rate
+                        self.logger.warning("High error rate detected in source thread", 
+                                          source_name=source_name, 
+                                          error_rate=error_rate,
+                                          errors_count=errors_count,
+                                          events_processed=events_processed)
+        
+        except Exception as e:
+            self.logger.error("Error checking source thread health", error=str(e))
     
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""

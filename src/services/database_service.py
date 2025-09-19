@@ -109,39 +109,53 @@ class DatabaseService:
     
     def get_master_status(self, config: DatabaseConfig) -> Dict[str, Any]:
         """Get MySQL master status"""
-        connection_name = "master_status"
+        connection = None
+        cursor = None
         
         try:
-            # Create a new connection specifically for this operation
-            connection = self.connect(config, connection_name)
+            # Create a direct connection without storing in connection pool
+            connection_params = config.to_connection_params()
+            # Add connection timeout and other robustness parameters
+            connection_params.update({
+                'connect_timeout': 10,
+                'read_timeout': 30,
+                'write_timeout': 30,
+                'autocommit': True
+            })
+            connection = pymysql.connect(**connection_params)
             
-            # Use the connection with proper error handling
-            with self.get_cursor(connection_name) as cursor:
-                cursor.execute("SHOW MASTER STATUS")
-                result = cursor.fetchone()
+            # Use the connection directly without validation checks
+            cursor = connection.cursor()
+            cursor.execute("SHOW MASTER STATUS")
+            result = cursor.fetchone()
+            
+            if result:
+                return {
+                    'file': result[0],
+                    'position': result[1],
+                    'binlog_do_db': result[2],
+                    'binlog_ignore_db': result[3],
+                    'executed_gtid_set': result[4] if len(result) > 4 else None
+                }
+            else:
+                raise ConnectionError("Could not get master status")
                 
-                if result:
-                    return {
-                        'file': result[0],
-                        'position': result[1],
-                        'binlog_do_db': result[2],
-                        'binlog_ignore_db': result[3],
-                        'executed_gtid_set': result[4] if len(result) > 4 else None
-                    }
-                else:
-                    raise ConnectionError("Could not get master status")
-                    
         except Exception as e:
-            self.logger.error("Error getting master status", error=str(e), connection_name=connection_name)
+            self.logger.error("Error getting master status", error=str(e))
             raise ConnectionError(f"Error getting master status: {e}")
         finally:
-            # Ensure connection is properly closed
-            if connection_name in self._connections:
+            # Ensure proper cleanup of direct connection
+            if cursor:
                 try:
-                    self.close_connection(connection_name)
+                    cursor.close()
                 except Exception as e:
-                    self.logger.debug("Error closing master status connection (expected during cleanup)", 
-                                    connection_name=connection_name, error=str(e))
+                    self.logger.debug("Error closing cursor during master status cleanup", error=str(e))
+            
+            if connection:
+                try:
+                    connection.close()
+                except Exception as e:
+                    self.logger.debug("Error closing connection during master status cleanup", error=str(e))
     
     def test_connection(self, config: DatabaseConfig) -> bool:
         """Test database connection"""

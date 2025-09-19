@@ -304,6 +304,7 @@ class TestDatabaseService:
             mock_connection = Mock()
             mock_cursor = Mock()
             mock_cursor.fetchone.return_value = ("mysql-bin.000001", 1234, "db1", "db2", "gtid_set")
+            mock_connection.cursor.return_value = mock_cursor
             mock_connect.return_value = mock_connection
             
             service = DatabaseService()
@@ -314,21 +315,20 @@ class TestDatabaseService:
                 database="db"
             )
             
-            # Mock the get_cursor context manager
-            with patch.object(service, 'get_cursor') as mock_get_cursor:
-                mock_get_cursor.return_value.__enter__.return_value = mock_cursor
-                mock_get_cursor.return_value.__exit__.return_value = None
-                
-                result = service.get_master_status(config)
-                
-                expected = {
-                    'file': 'mysql-bin.000001',
-                    'position': 1234,
-                    'binlog_do_db': 'db1',
-                    'binlog_ignore_db': 'db2',
-                    'executed_gtid_set': 'gtid_set'
-                }
-                assert result == expected
+            result = service.get_master_status(config)
+            
+            expected = {
+                'file': 'mysql-bin.000001',
+                'position': 1234,
+                'binlog_do_db': 'db1',
+                'binlog_ignore_db': 'db2',
+                'executed_gtid_set': 'gtid_set'
+            }
+            assert result == expected
+            
+            # Verify connection and cursor were properly closed
+            mock_cursor.close.assert_called_once()
+            mock_connection.close.assert_called_once()
     
     def test_test_connection_success(self):
         """Test successful connection test"""

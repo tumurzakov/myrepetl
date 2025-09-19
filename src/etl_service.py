@@ -24,6 +24,7 @@ class ETLService:
         self.config_service = ConfigService()
         self.thread_manager: Optional[ThreadManager] = None
         self.config: Optional[ETLConfig] = None
+        self.config_path: Optional[str] = None
         self._shutdown_requested = False
         
         # Setup signal handlers for graceful shutdown
@@ -48,6 +49,9 @@ class ETLService:
     def initialize(self, config_path: str) -> None:
         """Initialize ETL service with configuration"""
         try:
+            # Store config path for later use
+            self.config_path = config_path
+            
             # Load configuration
             self.config = self.config_service.load_config(config_path)
             
@@ -130,7 +134,7 @@ class ETLService:
             self.logger.info("Starting multithreaded replication process")
             
             # Start all services and threads
-            self.thread_manager.start(self.config)
+            self.thread_manager.start(self.config, self.config_path)
             
             # Establish target connections for init queries
             self._establish_target_connections()

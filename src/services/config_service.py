@@ -72,11 +72,18 @@ class ConfigService:
                 if table_mapping.primary_key not in table_mapping.column_mapping:
                     return False
                 
-                # Validate target table format (target_name.table_name)
-                try:
-                    config.parse_target_table(table_mapping.target_table)
-                except ConfigurationError:
+                # Validate source and target fields if present
+                if table_mapping.source and table_mapping.source not in config.sources:
                     return False
+                if table_mapping.target and table_mapping.target not in config.targets:
+                    return False
+                
+                # Validate target table format (target_name.table_name) - only if no target field
+                if not table_mapping.target:
+                    try:
+                        config.parse_target_table(table_mapping.target_table)
+                    except ConfigurationError:
+                        return False
             
             return True
             

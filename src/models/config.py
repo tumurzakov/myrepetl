@@ -85,6 +85,8 @@ class TableMapping:
     filter: Optional[Dict[str, Any]] = None
     init_query: Optional[str] = None
     source_table: Optional[str] = None
+    source: Optional[str] = None
+    target: Optional[str] = None
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -154,7 +156,9 @@ class ETLConfig:
                     column_mapping=column_mapping,
                     filter=table_config.get('filter'),
                     init_query=table_config.get('init_query'),
-                    source_table=table_config.get('source_table')
+                    source_table=table_config.get('source_table'),
+                    source=table_config.get('source'),
+                    target=table_config.get('target')
                 )
             
             return cls(
@@ -199,6 +203,37 @@ class ETLConfig:
                 return mapping
         return None
     
+    def get_mapping_by_source_and_table(self, source_name: str, schema: str, table: str) -> Optional[TableMapping]:
+        """Get table mapping by source name, schema and table"""
+        for mapping in self.mapping.values():
+            # Check if mapping has explicit source field and matches
+            if mapping.source == source_name and mapping.source_table:
+                if '.' in mapping.source_table:
+                    parts = mapping.source_table.split('.')
+                    if len(parts) == 2:
+                        mapping_schema, mapping_table = parts
+                        if mapping_schema == schema and mapping_table == table:
+                            return mapping
+                    elif len(parts) == 3:
+                        mapping_source, mapping_schema, mapping_table = parts
+                        if mapping_source == source_name and mapping_schema == schema and mapping_table == table:
+                            return mapping
+                elif mapping.source_table == table:
+                    # Use source config database as schema
+                    source_config = self.get_source_config(source_name)
+                    if source_config.database == schema:
+                        return mapping
+        return None
+    
+    def get_target_table_name(self, source_name: str, schema: str, table: str) -> Optional[str]:
+        """Get target table name for a given source table"""
+        mapping = self.get_mapping_by_source_and_table(source_name, schema, table)
+        if mapping and mapping.target and mapping.target_table:
+            # Build full target table name: target.database.table
+            target_config = self.get_target_config(mapping.target)
+            return f"{target_config.database}.{mapping.target_table}"
+        return None
+    
     def parse_source_table(self, source_table: str) -> Tuple[str, str]:
         """Parse source table string like 'source1.users' into (source_name, table_name)"""
         if '.' not in source_table:
@@ -215,7 +250,31 @@ class ETLConfig:
         tables = []
         
         for mapping_key, table_mapping in self.mapping.items():
-            # Check if mapping has source_table field
+            # First check if mapping has explicit source field
+            if table_mapping.source and table_mapping.source == source_name:
+                # Use source_table field (now contains only table name) and source config database as schema
+                if table_mapping.source_table:
+                    source_config = self.get_source_config(source_name)
+                    schema = source_config.database
+                    
+                    # Handle both simple table name and schema.table format for backward compatibility
+                    if '.' in table_mapping.source_table:
+                        parts = table_mapping.source_table.split('.')
+                        if len(parts) == 2:
+                            # Format: schema.table - use the schema from source_table
+                            schema, table_name = parts
+                            tables.append((schema, table_name))
+                        elif len(parts) == 3:
+                            # Format: source_name.schema.table
+                            mapping_source_name, schema, table_name = parts
+                            if mapping_source_name == source_name:
+                                tables.append((schema, table_name))
+                    else:
+                        # Simple table name - use source config database as schema
+                        tables.append((schema, table_mapping.source_table))
+                continue
+            
+            # Check if mapping has source_table field (legacy support)
             if table_mapping.source_table:
                 # Check if source_table contains schema (format: schema.table)
                 if '.' in table_mapping.source_table:
