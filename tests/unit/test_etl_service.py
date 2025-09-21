@@ -139,13 +139,13 @@ class TestETLService:
             service._shutdown_requested = False
             
             # Simulate running for a short time then shutdown
-            def side_effect():
+            def side_effect(*args):
                 service._shutdown_requested = True
             mock_sleep.side_effect = side_effect
             
             service.run_replication()
             
-            mock_thread_manager.return_value.start.assert_called_once_with(mock_config)
+            mock_thread_manager.return_value.start.assert_called_once_with(mock_config, None)
             mock_init_queries.assert_called_once()
             mock_thread_manager.return_value.stop.assert_called_once()
     
@@ -175,14 +175,14 @@ class TestETLService:
             service._shutdown_requested = False
             
             # Simulate keyboard interrupt
-            def side_effect():
+            def side_effect(*args):
                 raise KeyboardInterrupt()
             mock_sleep.side_effect = side_effect
             
             # Should not raise exception
             service.run_replication()
             
-            mock_thread_manager.return_value.start.assert_called_once_with(mock_config)
+            mock_thread_manager.return_value.start.assert_called_once_with(mock_config, None)
             mock_init_queries.assert_called_once()
     
     def test_run_replication_error(self):

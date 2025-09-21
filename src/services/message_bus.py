@@ -172,10 +172,20 @@ class MessageBus:
     def process_messages(self, timeout: float = 1.0) -> None:
         """Process messages from the queue"""
         try:
+            # Process messages until timeout or shutdown
+            start_time = time.time()
             while not self._is_shutdown_requested():
                 try:
-                    # Get message with timeout
-                    message = self._message_queue.get(timeout=timeout)
+                    # Calculate remaining timeout
+                    elapsed = time.time() - start_time
+                    remaining_timeout = max(0, timeout - elapsed)
+                    
+                    if remaining_timeout <= 0:
+                        # Timeout reached, exit
+                        break
+                    
+                    # Get message with remaining timeout
+                    message = self._message_queue.get(timeout=remaining_timeout)
                     
                     # Process message
                     self._process_message(message)
@@ -187,8 +197,8 @@ class MessageBus:
                         self._stats['messages_processed'] += 1
                         
                 except queue.Empty:
-                    # Timeout reached, continue to check shutdown
-                    continue
+                    # Timeout reached, exit
+                    break
                     
         except Exception as e:
             self.logger.error("Error processing messages", error=str(e))

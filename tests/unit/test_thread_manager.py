@@ -41,7 +41,7 @@ class TestThreadManager:
             manager.start(config)
             
             assert manager.get_status() == ServiceStatus.RUNNING
-            mock_load_transform.assert_called_once_with(config)
+            mock_load_transform.assert_called_once_with(config, None)
             mock_start_bus.assert_called_once()
             mock_start_targets.assert_called_once_with(config)
             mock_start_sources.assert_called_once_with(config)
@@ -302,8 +302,11 @@ class TestThreadManager:
         manager = ThreadManager()
         config = Mock(spec=ETLConfig)
         
-        # Should not raise exception
-        manager._load_transform_module(config)
+        # Mock the transform service to avoid actual module loading
+        with patch.object(manager.transform_service, 'load_transform_module') as mock_load:
+            # Should not raise exception
+            manager._load_transform_module(config)
+            mock_load.assert_called_once_with("transform", None)
     
     def test_service_stats_creation(self):
         """Test ServiceStats creation"""

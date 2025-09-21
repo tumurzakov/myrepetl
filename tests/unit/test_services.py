@@ -167,7 +167,9 @@ class TestConfigService:
                 "source1.table": Mock(
                     target_table="target1.table",
                     primary_key="id",
-                    column_mapping={"id": Mock(column="id")}
+                    column_mapping={"id": Mock(column="id")},
+                    source=None,
+                    target=None
                 )
             }
         )

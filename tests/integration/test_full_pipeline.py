@@ -179,13 +179,13 @@ class TestFullPipeline:
             service._shutdown_requested = False
             
             # Simulate running for a short time then shutdown
-            def side_effect():
+            def side_effect(*args):
                 service._shutdown_requested = True
             mock_sleep.side_effect = side_effect
             
             service.run_replication()
             
-            mock_thread_manager.return_value.start.assert_called_once_with(config)
+            mock_thread_manager.return_value.start.assert_called_once_with(config, None)
             mock_init_queries.assert_called_once()
             mock_thread_manager.return_value.stop.assert_called_once()
     
