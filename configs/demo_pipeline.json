@@ -39,7 +39,7 @@
       "source": "source1",
       "target": "target1",
       "source_table": "users",
-      "target_table": "target1.users",
+      "target_table": "users",
       "primary_key": "id",
       "column_mapping": {
         "id": {"column": "id", "primary_key": true},
@@ -53,7 +53,7 @@
       "source": "source2",
       "target": "target1",
       "source_table": "users",
-      "target_table": "target1.users",
+      "target_table": "users",
       "primary_key": "id",
       "column_mapping": {
         "id": {"column": "id", "primary_key": true},

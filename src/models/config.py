@@ -250,70 +250,29 @@ class ETLConfig:
         tables = []
         
         for mapping_key, table_mapping in self.mapping.items():
-            # First check if mapping has explicit source field
-            if table_mapping.source and table_mapping.source == source_name:
-                # Use source_table field (now contains only table name) and source config database as schema
-                if table_mapping.source_table:
-                    source_config = self.get_source_config(source_name)
-                    schema = source_config.database
-                    
-                    # Handle both simple table name and schema.table format for backward compatibility
-                    if '.' in table_mapping.source_table:
-                        parts = table_mapping.source_table.split('.')
-                        if len(parts) == 2:
-                            # Format: schema.table - use the schema from source_table
-                            schema, table_name = parts
-                            tables.append((schema, table_name))
-                        elif len(parts) == 3:
-                            # Format: source_name.schema.table
-                            mapping_source_name, schema, table_name = parts
-                            if mapping_source_name == source_name:
-                                tables.append((schema, table_name))
-                    else:
-                        # Simple table name - use source config database as schema
-                        tables.append((schema, table_mapping.source_table))
+            # Only process mappings that explicitly specify this source
+            if table_mapping.source != source_name:
                 continue
-            
-            # Check if mapping has source_table field (legacy support)
-            if table_mapping.source_table:
-                # Check if source_table contains schema (format: schema.table)
-                if '.' in table_mapping.source_table:
-                    parts = table_mapping.source_table.split('.')
-                    if len(parts) == 2:
-                        # Format: schema.table - check if schema matches source_name
-                        schema, table_name = parts
-                        if schema == source_name:
-                            tables.append((schema, table_name))
-                    elif len(parts) == 3:
-                        # Format: source_name.schema.table
-                        mapping_source_name, schema, table_name = parts
-                        if mapping_source_name == source_name:
-                            tables.append((schema, table_name))
-                else:
-                    # Try old format: source_name.table_name
-                    try:
-                        mapping_source_name, table_name = self.parse_source_table(table_mapping.source_table)
-                        if mapping_source_name == source_name:
-                            # Use source config database as schema
-                            source_config = self.get_source_config(source_name)
-                            schema = source_config.database
-                            tables.append((schema, table_name))
-                    except Exception:
-                        # Skip invalid source_table format
-                        continue
-            else:
-                # Fallback to mapping key format (source_name.table_name)
-                if '.' in mapping_key:
-                    mapping_source_name, table_name = mapping_key.split('.', 1)
+                
+            if not table_mapping.source_table:
+                continue
+                
+            # Handle schema.table format
+            if '.' in table_mapping.source_table:
+                parts = table_mapping.source_table.split('.')
+                if len(parts) == 2:
+                    # Format: schema.table
+                    schema, table_name = parts
+                    tables.append((schema, table_name))
+                elif len(parts) == 3:
+                    # Format: source_name.schema.table
+                    mapping_source_name, schema, table_name = parts
                     if mapping_source_name == source_name:
-                        # Check if table_name already contains schema (format: schema.table)
-                        if '.' in table_name:
-                            schema, actual_table = table_name.split('.', 1)
-                            tables.append((schema, actual_table))
-                        else:
-                            # Fallback to source config database as schema
-                            source_config = self.get_source_config(source_name)
-                            schema = source_config.database
-                            tables.append((schema, table_name))
+                        tables.append((schema, table_name))
+            else:
+                # Simple table name - use source config database as schema
+                source_config = self.get_source_config(source_name)
+                schema = source_config.database
+                tables.append((schema, table_mapping.source_table))
         
         return tables
