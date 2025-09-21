@@ -14,9 +14,23 @@ from src.models.config import ETLConfig, DatabaseConfig
 class TestThreadManager:
     """Test ThreadManager"""
     
+    def _create_manager(self):
+        """Helper method to create ThreadManager with mocked dependencies"""
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        
+        return ThreadManager(
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service
+        )
+    
     def test_thread_manager_initialization(self):
         """Test thread manager initialization"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         
         assert manager.message_bus is not None
         assert manager.database_service is not None
@@ -35,7 +49,7 @@ class TestThreadManager:
              patch('src.services.thread_manager.ThreadManager._start_source_threads') as mock_start_sources, \
              patch('src.services.thread_manager.ThreadManager._start_monitoring') as mock_start_monitoring:
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             config = Mock(spec=ETLConfig)
             
             manager.start(config)
@@ -52,7 +66,7 @@ class TestThreadManager:
         with patch('src.services.thread_manager.ThreadManager._load_transform_module') as mock_load_transform:
             mock_load_transform.side_effect = Exception("Load error")
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             config = Mock(spec=ETLConfig)
             
             with pytest.raises(Exception, match="Load error"):
@@ -65,7 +79,7 @@ class TestThreadManager:
         with patch('src.services.thread_manager.ThreadManager._stop_message_bus_processing') as mock_stop_bus, \
              patch('src.services.thread_manager.ThreadManager._stop_monitoring') as mock_stop_monitoring:
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             manager._status = ServiceStatus.RUNNING
             
             manager.stop()
@@ -77,7 +91,7 @@ class TestThreadManager:
     
     def test_stop_already_stopped(self):
         """Test stopping already stopped service"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         manager._status = ServiceStatus.STOPPED
         
         # Should not raise exception
@@ -87,7 +101,7 @@ class TestThreadManager:
     
     def test_get_status(self):
         """Test getting service status"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         
         assert manager.get_status() == ServiceStatus.STOPPED
         
@@ -96,7 +110,7 @@ class TestThreadManager:
     
     def test_get_stats(self):
         """Test getting service statistics"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         with patch.object(manager, 'source_thread_service') as mock_source_service, \
              patch.object(manager, 'target_thread_service') as mock_target_service, \
              patch.object(manager, 'message_bus') as mock_message_bus:
@@ -130,7 +144,7 @@ class TestThreadManager:
     
     def test_is_running(self):
         """Test checking if service is running"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         
         assert not manager.is_running()
         
@@ -142,7 +156,7 @@ class TestThreadManager:
     
     def test_wait_for_completion_success(self):
         """Test waiting for completion successfully"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         manager._status = ServiceStatus.RUNNING
         
         # Simulate status change after short delay
@@ -160,7 +174,7 @@ class TestThreadManager:
     
     def test_wait_for_completion_timeout(self):
         """Test waiting for completion with timeout"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         manager._status = ServiceStatus.RUNNING
         
         result = manager.wait_for_completion(timeout=0.1)
@@ -173,7 +187,7 @@ class TestThreadManager:
             mock_thread = Mock()
             mock_thread_class.return_value = mock_thread
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             manager._start_message_bus_processing()
             
             mock_thread_class.assert_called_once()
@@ -187,7 +201,7 @@ class TestThreadManager:
             mock_thread.is_alive.return_value = True
             mock_thread_class.return_value = mock_thread
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             manager._message_bus_thread = mock_thread
             manager._stop_message_bus_processing()
             
@@ -195,7 +209,7 @@ class TestThreadManager:
     
     def test_start_source_threads(self):
         """Test starting source threads"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         with patch.object(manager, 'source_thread_service') as mock_source_service:
             config = Mock(spec=ETLConfig)
             config.sources = {
@@ -211,7 +225,7 @@ class TestThreadManager:
     
     def test_start_target_threads(self):
         """Test starting target threads"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         with patch.object(manager, 'target_thread_service') as mock_target_service:
             config = Mock(spec=ETLConfig)
             config.targets = {
@@ -229,7 +243,7 @@ class TestThreadManager:
             mock_thread = Mock()
             mock_thread_class.return_value = mock_thread
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             manager._start_monitoring()
             
             mock_thread_class.assert_called_once()
@@ -243,7 +257,7 @@ class TestThreadManager:
             mock_thread.is_alive.return_value = True
             mock_thread_class.return_value = mock_thread
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             manager._monitoring_thread = mock_thread
             manager._stop_monitoring()
             
@@ -251,7 +265,7 @@ class TestThreadManager:
     
     def test_message_bus_worker(self):
         """Test message bus worker thread"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         with patch.object(manager, 'message_bus') as mock_message_bus:
             
             # Simulate shutdown after processing
@@ -276,7 +290,7 @@ class TestThreadManager:
                 total_errors=0
             )
             
-            manager = ThreadManager()
+            manager = self._create_manager()
             manager._monitoring_interval = 0.1  # Short interval for testing
             
             # Simulate shutdown after one iteration
@@ -290,7 +304,7 @@ class TestThreadManager:
     
     def test_is_shutdown_requested(self):
         """Test checking if shutdown is requested"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         
         assert not manager._is_shutdown_requested()
         
@@ -299,7 +313,7 @@ class TestThreadManager:
     
     def test_load_transform_module(self):
         """Test loading transform module"""
-        manager = ThreadManager()
+        manager = self._create_manager()
         config = Mock(spec=ETLConfig)
         
         # Mock the transform service to avoid actual module loading

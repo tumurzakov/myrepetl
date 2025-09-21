@@ -13,6 +13,7 @@ from .models.config import ETLConfig
 from .models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent
 from .services import ConfigService, DatabaseService, TransformService, ReplicationService, FilterService
 from .services.thread_manager import ThreadManager
+from .services.message_bus import MessageBus
 from .utils import SQLBuilder, retry_on_connection_error, retry_on_transform_error
 
 
@@ -26,6 +27,12 @@ class ETLService:
         self.config: Optional[ETLConfig] = None
         self.config_path: Optional[str] = None
         self._shutdown_requested = False
+        
+        # Core services for dependency injection
+        self.message_bus = MessageBus(max_queue_size=10000)
+        self.database_service = DatabaseService()
+        self.transform_service = TransformService()
+        self.filter_service = FilterService()
         
         # Setup signal handlers for graceful shutdown
         self._setup_signal_handlers()
@@ -59,8 +66,13 @@ class ETLService:
             if not self.config_service.validate_config(self.config):
                 raise ETLException("Invalid configuration")
             
-            # Initialize thread manager
-            self.thread_manager = ThreadManager()
+            # Initialize thread manager with dependency injection
+            self.thread_manager = ThreadManager(
+                message_bus=self.message_bus,
+                database_service=self.database_service,
+                transform_service=self.transform_service,
+                filter_service=self.filter_service
+            )
             
             self.logger.info("ETL service initialized", config_path=config_path)
             

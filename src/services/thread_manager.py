@@ -45,14 +45,15 @@ class ServiceStats:
 class ThreadManager:
     """Manages all threads and their lifecycle"""
     
-    def __init__(self):
+    def __init__(self, message_bus: MessageBus, database_service: DatabaseService, 
+                 transform_service: TransformService, filter_service: FilterService):
         self.logger = structlog.get_logger()
         
-        # Core services
-        self.message_bus = MessageBus(max_queue_size=10000)
-        self.database_service = DatabaseService()
-        self.transform_service = TransformService()
-        self.filter_service = FilterService()
+        # Core services (injected dependencies)
+        self.message_bus = message_bus
+        self.database_service = database_service
+        self.transform_service = transform_service
+        self.filter_service = filter_service
         
         # Thread services
         self.source_thread_service = SourceThreadService(self.message_bus, self.database_service)
