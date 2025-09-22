@@ -518,7 +518,7 @@ class MetricsService:
                 
                 # Get init thread status
                 init_stats = stats.init_query_stats
-                init_running = sum(1 for s in init_stats.values() if s.get('status') == 'running')
+                init_running = sum(1 for s in init_stats.values() if s.get('is_running', False))
                 init_total = len(init_stats)
                 
                 thread_health["init_threads"]["count"] = init_running
@@ -526,16 +526,26 @@ class MetricsService:
                 thread_health["init_threads"]["status"] = "healthy" if init_running > 0 else "warning" if init_total > 0 else "unknown"
                 
                 for mapping_key, stat in init_stats.items():
+                    # Determine status based on thread state
+                    if stat.get('is_running', False):
+                        status = 'running'
+                    elif stat.get('is_completed', False):
+                        status = 'completed'
+                    elif stat.get('rows_processed', 0) > 0:
+                        status = 'active'  # Has processed data but not currently running
+                    else:
+                        status = 'unknown'
+                    
                     thread_health["init_threads"]["details"].append({
                         "mapping": mapping_key,
-                        "status": stat.get('status', 'unknown'),
+                        "status": status,
                         "rows_processed": stat.get('rows_processed', 0),
                         "errors_count": stat.get('errors_count', 0)
                     })
                 
                 # Get target thread status
                 target_stats = stats.target_stats
-                target_running = sum(1 for s in target_stats.values() if s.get('status') == 'running')
+                target_running = sum(1 for s in target_stats.values() if s.get('is_running', False))
                 target_total = len(target_stats)
                 
                 thread_health["target_threads"]["count"] = target_running
@@ -543,16 +553,24 @@ class MetricsService:
                 thread_health["target_threads"]["status"] = "healthy" if target_running > 0 else "warning" if target_total > 0 else "unknown"
                 
                 for target_name, stat in target_stats.items():
+                    # Determine status based on thread state
+                    if stat.get('is_running', False):
+                        status = 'running'
+                    elif stat.get('events_processed', 0) > 0:
+                        status = 'active'  # Has processed data but not currently running
+                    else:
+                        status = 'unknown'
+                    
                     thread_health["target_threads"]["details"].append({
                         "target": target_name,
-                        "status": stat.get('status', 'unknown'),
+                        "status": status,
                         "events_processed": stat.get('events_processed', 0),
                         "errors_count": stat.get('errors_count', 0)
                     })
                 
                 # Get source thread status
                 source_stats = stats.source_stats
-                source_running = sum(1 for s in source_stats.values() if s.get('status') == 'running')
+                source_running = sum(1 for s in source_stats.values() if s.get('is_running', False))
                 source_total = len(source_stats)
                 
                 thread_health["source_threads"]["count"] = source_running
@@ -560,9 +578,17 @@ class MetricsService:
                 thread_health["source_threads"]["status"] = "healthy" if source_running > 0 else "warning" if source_total > 0 else "unknown"
                 
                 for source_name, stat in source_stats.items():
+                    # Determine status based on thread state
+                    if stat.get('is_running', False):
+                        status = 'running'
+                    elif stat.get('events_processed', 0) > 0:
+                        status = 'active'  # Has processed data but not currently running
+                    else:
+                        status = 'unknown'
+                    
                     thread_health["source_threads"]["details"].append({
                         "source": source_name,
-                        "status": stat.get('status', 'unknown'),
+                        "status": status,
                         "events_processed": stat.get('events_processed', 0),
                         "errors_count": stat.get('errors_count', 0)
                     })
