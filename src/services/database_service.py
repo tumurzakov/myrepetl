@@ -81,6 +81,19 @@ class DatabaseService:
                     cursor.close()
                 except Exception:
                     pass  # Ignore errors during cleanup
+            
+            # Check if this is a "Command Out of Sync" error
+            if hasattr(e, 'args') and e.args and e.args[0] == 2014:
+                self.logger.warning("Command Out of Sync error in cursor, forcing connection reset", 
+                                  connection_name=connection_name)
+                # Force connection reset by removing it from pool
+                if connection_name in self._connections:
+                    try:
+                        self._connections[connection_name].close()
+                    except Exception:
+                        pass
+                    del self._connections[connection_name]
+            
             raise
         finally:
             if cursor:
@@ -232,11 +245,28 @@ class DatabaseService:
                 ConnectionError, OSError, IOError, AttributeError, Exception) as e:
             # Log specific MySQL errors for debugging
             if isinstance(e, (pymysql.err.OperationalError, pymysql.err.InternalError)):
-                self.logger.debug("MySQL connection error detected", 
-                                connection_name=connection_name, 
-                                error_type=type(e).__name__,
-                                error_code=getattr(e, 'args', [None])[0] if e.args else None,
-                                error_message=str(e))
+                error_code = getattr(e, 'args', [None])[0] if e.args else None
+                
+                # Special handling for "Command Out of Sync" error
+                if error_code == 2014:
+                    self.logger.warning("MySQL Command Out of Sync detected - connection needs reset", 
+                                      connection_name=connection_name, 
+                                      error_type=type(e).__name__,
+                                      error_code=error_code,
+                                      error_message=str(e))
+                    # Mark connection as invalid so it gets recreated
+                    if connection_name in self._connections:
+                        try:
+                            self._connections[connection_name].close()
+                        except Exception:
+                            pass
+                        del self._connections[connection_name]
+                else:
+                    self.logger.debug("MySQL connection error detected", 
+                                    connection_name=connection_name, 
+                                    error_type=type(e).__name__,
+                                    error_code=error_code,
+                                    error_message=str(e))
             # Any exception means connection is not usable
             return False
     
@@ -360,18 +390,38 @@ class DatabaseService:
                                    page_size: int = 1000, offset: int = 0) -> Tuple[list, list, bool]:
         """Execute init query with pagination and return results with column names and has_more flag"""
         try:
+            # Ensure connection is valid before executing query
+            if not self.is_connected(connection_name):
+                self.logger.warning("Connection not available, attempting to reconnect", 
+                                  connection_name=connection_name)
+                if not self.reconnect_if_needed(connection_name):
+                    raise ConnectionError(f"Could not establish connection: {connection_name}")
+            
             with self.get_cursor(connection_name) as cursor:
                 # Add LIMIT and OFFSET to the query
                 paginated_query = f"{query} LIMIT {page_size} OFFSET {offset}"
+                
+                # Execute query and ensure all results are fetched
                 cursor.execute(paginated_query)
                 results = cursor.fetchall()
+                
+                # Get column names
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                
+                # Ensure cursor is fully consumed before checking for more results
+                # This prevents "Command Out of Sync" errors
+                cursor.fetchall()  # This will return empty list but ensures cursor is consumed
                 
                 # Check if there are more results
                 has_more = len(results) == page_size
                 
                 return results, columns, has_more
         except Exception as e:
+            # Log the specific error for debugging
+            self.logger.error("Error executing paginated init query", 
+                            connection_name=connection_name, 
+                            error_type=type(e).__name__,
+                            error_message=str(e))
             raise ConnectionError(f"Error executing paginated init query: {e}")
     
     def get_init_query_total_count(self, query: str, connection_name: str = "default") -> int:
