@@ -392,11 +392,24 @@ class InitQueryThread:
                               source_connection=source_connection_name)
             
             if not self.database_service.reconnect_if_needed(source_connection_name):
-                raise ConnectionError(f"Could not reconnect to source database: {source_connection_name}")
-            
-            self.logger.info(f"Successfully reconnected to source database for {operation}", 
-                           mapping_key=self.mapping_key,
-                           source_connection=source_connection_name)
+                # If reconnection fails, try to recreate the connection from scratch
+                self.logger.warning(f"Reconnection failed, attempting to recreate connection", 
+                                  mapping_key=self.mapping_key,
+                                  source_connection=source_connection_name)
+                
+                try:
+                    # Recreate the connection using the same logic as setup
+                    source_config = self.config.get_source_config(self.source_name)
+                    self.database_service.connect(source_config, source_connection_name)
+                    self.logger.info(f"Successfully recreated source connection for {operation}", 
+                                   mapping_key=self.mapping_key,
+                                   source_connection=source_connection_name)
+                except Exception as e:
+                    raise ConnectionError(f"Could not recreate source database connection: {source_connection_name}. Error: {e}")
+            else:
+                self.logger.info(f"Successfully reconnected to source database for {operation}", 
+                               mapping_key=self.mapping_key,
+                               source_connection=source_connection_name)
     
     def _mark_completion(self, reason: str, error: str = None) -> None:
         """Mark thread completion with given reason"""
@@ -506,13 +519,25 @@ class InitQueryThread:
             if source_connection_name in self.database_service._connections:
                 connection = self.database_service._connections[source_connection_name]
                 if connection:
-                    connection.close()
-                # Remove only connection, keep config
+                    try:
+                        connection.close()
+                    except Exception as close_error:
+                        self.logger.debug("Error closing connection (expected during cleanup)", 
+                                        connection_name=source_connection_name, 
+                                        error=str(close_error))
+                
+                # Remove only connection, keep config for potential reconnection
                 self.database_service._remove_connection_only_atomic(source_connection_name)
+                self.logger.debug("Source connection cleaned up successfully", 
+                                connection_name=source_connection_name)
+            else:
+                self.logger.debug("Source connection not found for cleanup", 
+                                connection_name=source_connection_name)
         except Exception as e:
-            self.logger.warning("Error closing source connection", 
+            self.logger.warning("Error during source connection cleanup", 
                               connection_name=source_connection_name, 
                               error=str(e))
+            # Don't re-raise - cleanup errors shouldn't stop the thread
     
     def _finalize_run_state(self) -> None:
         """Finalize run state after thread execution"""

@@ -489,9 +489,18 @@ class DatabaseService:
                     if not self.reconnect_if_needed(connection_name):
                         # If reconnection fails, provide detailed error message
                         if connection_name not in self._connection_configs:
-                            raise ConnectionError(f"No configuration found for connection: {connection_name}. "
-                                                f"This usually means the connection was never established or "
-                                                f"the configuration was lost due to an error.")
+                            # For init query connections, try to recreate from source config
+                            if connection_name.startswith("init_source_"):
+                                self.logger.warning("Init source connection config lost, attempting to recreate", 
+                                                  connection_name=connection_name)
+                                # This is a non-retryable error for init queries - the thread should handle it
+                                raise ConnectionError(f"No configuration found for init source connection: {connection_name}. "
+                                                    f"The connection configuration was lost, likely due to a cleanup error. "
+                                                    f"The init query thread should recreate the connection.")
+                            else:
+                                raise ConnectionError(f"No configuration found for connection: {connection_name}. "
+                                                    f"This usually means the connection was never established or "
+                                                    f"the configuration was lost due to an error.")
                         else:
                             raise ConnectionError(f"Could not establish connection: {connection_name}. "
                                                 f"Configuration exists but connection failed.")
