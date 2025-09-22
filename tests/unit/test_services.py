@@ -396,6 +396,83 @@ class TestDatabaseService:
         assert len(service._connections) == 0
         mock_connection1.close.assert_called_once()
         mock_connection2.close.assert_called_once()
+    
+    def test_connection_exists(self):
+        """Test checking if connection exists"""
+        service = DatabaseService()
+        
+        # Test non-existent connection
+        assert not service.connection_exists("nonexistent")
+        
+        # Test existing connection
+        service._connections["test"] = Mock()
+        assert service.connection_exists("test")
+    
+    def test_get_connection_status(self):
+        """Test getting connection status"""
+        service = DatabaseService()
+        
+        # Test non-existent connection
+        status = service.get_connection_status("nonexistent")
+        assert not status['exists']
+        assert not status['is_connected']
+        assert not status['has_config']
+        assert status['error'] is None
+        
+        # Test existing connection
+        mock_connection = Mock()
+        mock_connection.ping.return_value = None
+        service._connections["test"] = mock_connection
+        service._connection_configs["test"] = Mock()
+        
+        status = service.get_connection_status("test")
+        assert status['exists']
+        assert status['is_connected']
+        assert status['has_config']
+        assert status['error'] is None
+    
+    def test_reconnect_if_needed_success(self):
+        """Test successful reconnection"""
+        service = DatabaseService()
+        mock_config = Mock()
+        mock_connection = Mock()
+        service._connection_configs["test"] = mock_config
+        
+        with patch.object(service, 'is_connected', return_value=False):
+            with patch.object(service, 'close_connection'):
+                with patch.object(service, 'connect', return_value=mock_connection) as mock_connect:
+                    result = service.reconnect_if_needed("test")
+                    
+                    assert result is True
+                    mock_connect.assert_called_once_with(mock_config, "test")
+    
+    def test_reconnect_if_needed_already_connected(self):
+        """Test reconnection when already connected"""
+        service = DatabaseService()
+        
+        with patch.object(service, 'is_connected', return_value=True):
+            result = service.reconnect_if_needed("test")
+            assert result is True
+    
+    def test_reconnect_if_needed_no_config(self):
+        """Test reconnection when no config exists"""
+        service = DatabaseService()
+        
+        with patch.object(service, 'is_connected', return_value=False):
+            result = service.reconnect_if_needed("test")
+            assert result is False
+    
+    def test_reconnect_if_needed_failure(self):
+        """Test reconnection failure"""
+        service = DatabaseService()
+        mock_config = Mock()
+        service._connection_configs["test"] = mock_config
+        
+        with patch.object(service, 'is_connected', return_value=False):
+            with patch.object(service, 'close_connection'):
+                with patch.object(service, 'connect', side_effect=Exception("Connection failed")):
+                    result = service.reconnect_if_needed("test")
+                    assert result is False
 
 
 class TestTransformService:

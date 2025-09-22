@@ -345,4 +345,103 @@ class TestThreadManager:
         assert stats.message_bus_stats["messages_sent"] == 50
         assert stats.source_stats["source1"]["events_processed"] == 50
         assert stats.target_stats["target1"]["events_processed"] == 50
+    
+    def test_check_target_connection_health_all_healthy(self):
+        """Test target connection health check when all connections are healthy"""
+        manager = self._create_manager()
+        config = Mock(spec=ETLConfig)
+        config.targets = {"target1": Mock(), "target2": Mock()}
+        
+        with patch.object(manager, '_current_config', config):
+            with patch.object(manager.database_service, 'get_connection_status') as mock_status:
+                mock_status.return_value = {'exists': True, 'is_connected': True, 'has_config': True, 'error': None}
+                
+                with patch.object(manager, '_resume_source_threads') as mock_resume:
+                    manager._check_target_connection_health()
+                    
+                    # Should call get_connection_status for each target
+                    assert mock_status.call_count == 2
+                    mock_resume.assert_called_once()
+    
+    def test_check_target_connection_health_unhealthy_connections(self):
+        """Test target connection health check when connections are unhealthy"""
+        manager = self._create_manager()
+        config = Mock(spec=ETLConfig)
+        config.targets = {"target1": Mock(), "target2": Mock()}
+        
+        with patch.object(manager, '_current_config', config):
+            with patch.object(manager.database_service, 'get_connection_status') as mock_status:
+                # First target is healthy, second is unhealthy
+                mock_status.side_effect = [
+                    {'exists': True, 'is_connected': True, 'has_config': True, 'error': None},
+                    {'exists': False, 'is_connected': False, 'has_config': False, 'error': 'Connection lost'}
+                ]
+                
+                with patch.object(manager.database_service, 'reconnect_if_needed') as mock_reconnect:
+                    mock_reconnect.return_value = False  # Reconnection fails
+                    
+                    with patch.object(manager, '_pause_source_threads') as mock_pause:
+                        manager._check_target_connection_health()
+                        
+                        # Should call get_connection_status for each target
+                        assert mock_status.call_count == 2
+                        # Should try to reconnect the unhealthy target
+                        mock_reconnect.assert_called_once_with("target2")
+                        mock_pause.assert_called_once()
+    
+    def test_check_target_connection_health_successful_reconnection(self):
+        """Test target connection health check with successful reconnection"""
+        manager = self._create_manager()
+        config = Mock(spec=ETLConfig)
+        config.targets = {"target1": Mock()}
+        
+        with patch.object(manager, '_current_config', config):
+            with patch.object(manager.database_service, 'get_connection_status') as mock_status:
+                mock_status.return_value = {'exists': False, 'is_connected': False, 'has_config': False, 'error': 'Connection lost'}
+                
+                with patch.object(manager.database_service, 'reconnect_if_needed') as mock_reconnect:
+                    mock_reconnect.return_value = True  # Reconnection succeeds
+                    
+                    with patch.object(manager, '_resume_source_threads') as mock_resume:
+                        manager._check_target_connection_health()
+                        
+                        mock_status.assert_called_once_with("target1")
+                        mock_reconnect.assert_called_once_with("target1")
+                        mock_resume.assert_called_once()
+    
+    def test_pause_source_threads(self):
+        """Test pausing source threads"""
+        manager = self._create_manager()
+        
+        with patch.object(manager.source_thread_service, 'get_all_stats') as mock_stats:
+            mock_stats.return_value = {
+                "source1": {"is_running": True},
+                "source2": {"is_running": False}
+            }
+            
+            # Should not raise exception
+            manager._pause_source_threads()
+            mock_stats.assert_called_once()
+    
+    def test_resume_source_threads(self):
+        """Test resuming source threads"""
+        manager = self._create_manager()
+        
+        with patch.object(manager.source_thread_service, 'get_all_stats') as mock_stats:
+            mock_stats.return_value = {
+                "source1": {"is_running": True},
+                "source2": {"is_running": False}
+            }
+            
+            # Should not raise exception
+            manager._resume_source_threads()
+            mock_stats.assert_called_once()
+    
+    def test_check_target_connection_health_no_config(self):
+        """Test target connection health check when no config is available"""
+        manager = self._create_manager()
+        
+        with patch.object(manager, '_current_config', None):
+            # Should not raise exception and should return early
+            manager._check_target_connection_health()
 

@@ -300,6 +300,20 @@ class ETLService:
                         )
                         
                         try:
+                            # Ensure target connection is available before executing
+                            if not database_service.connection_exists(target_name):
+                                self.logger.warning("Target connection not found, attempting to establish", 
+                                                  target_name=target_name)
+                                target_config = self.config.get_target_config(target_name)
+                                database_service.connect(target_config, target_name)
+                            
+                            # Check and reconnect if needed
+                            if not database_service.reconnect_if_needed(target_name):
+                                self.logger.warning("Target connection not available, skipping init query row", 
+                                                  target_name=target_name,
+                                                  mapping_key=mapping_key)
+                                continue
+                            
                             database_service.execute_update(sql, values, target_name)
                             self.logger.debug("Init query row processed successfully", 
                                             mapping_key=mapping_key, 

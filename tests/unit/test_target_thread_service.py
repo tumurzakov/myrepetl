@@ -464,4 +464,173 @@ class TestTargetThreadService:
             
             assert "target1" in running_targets
             assert "target2" not in running_targets
+    
+    def test_ensure_target_connection_success(self):
+        """Test successful target connection ensuring"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        database_service.connection_exists.return_value = True
+        database_service.reconnect_if_needed.return_value = True
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        result = thread._ensure_target_connection()
+        
+        assert result is True
+        database_service.connection_exists.assert_called_once_with("test_target")
+        database_service.reconnect_if_needed.assert_called_once_with("test_target")
+    
+    def test_ensure_target_connection_create_new(self):
+        """Test creating new target connection"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        database_service.connection_exists.return_value = False
+        database_service.connect.return_value = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        result = thread._ensure_target_connection()
+        
+        assert result is True
+        database_service.connection_exists.assert_called_once_with("test_target")
+        database_service.connect.assert_called_once_with(target_config, "test_target")
+        # reconnect_if_needed is not called when creating new connection
+    
+    def test_ensure_target_connection_failure(self):
+        """Test target connection ensuring failure"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        database_service.connection_exists.return_value = False
+        database_service.connect.side_effect = Exception("Connection failed")
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        result = thread._ensure_target_connection()
+        
+        assert result is False
+        database_service.connection_exists.assert_called_once_with("test_target")
+        database_service.connect.assert_called_once_with(target_config, "test_target")
+    
+    def test_execute_with_retry_success(self):
+        """Test successful execution with retry"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        database_service.connection_exists.return_value = True
+        database_service.reconnect_if_needed.return_value = True
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        mock_operation = Mock(return_value="success")
+        
+        result = thread._execute_with_retry(mock_operation, "arg1", "arg2", kwarg1="value1")
+        
+        assert result == "success"
+        mock_operation.assert_called_once_with("arg1", "arg2", kwarg1="value1")
+    
+    def test_execute_with_retry_connection_failure(self):
+        """Test execution with retry when connection fails"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        database_service.connection_exists.return_value = False
+        database_service.connect.side_effect = Exception("Connection failed")
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        mock_operation = Mock()
+        
+        with pytest.raises(Exception, match="Target connection not available after all retries"):
+            thread._execute_with_retry(mock_operation, "arg1")
+        
+        # Should have tried 3 times
+        assert database_service.connection_exists.call_count == 3
+        assert database_service.connect.call_count == 3
+    
+    def test_execute_with_retry_operation_failure(self):
+        """Test execution with retry when operation fails"""
+        target_config = Mock(spec=DatabaseConfig)
+        message_bus = Mock()
+        database_service = Mock()
+        database_service.connection_exists.return_value = True
+        database_service.reconnect_if_needed.return_value = True
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        mock_operation = Mock(side_effect=Exception("Operation failed"))
+        
+        with pytest.raises(Exception, match="Operation failed"):
+            thread._execute_with_retry(mock_operation, "arg1")
+        
+        # Should have tried 3 times
+        assert mock_operation.call_count == 3
 

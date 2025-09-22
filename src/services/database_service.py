@@ -176,6 +176,27 @@ class DatabaseService:
             raise ConnectionError(f"Connection config '{connection_name}' not found")
         return self._connection_configs[connection_name]
     
+    def connection_exists(self, connection_name: str) -> bool:
+        """Check if connection exists in the pool"""
+        return connection_name in self._connections
+    
+    def get_connection_status(self, connection_name: str) -> Dict[str, Any]:
+        """Get detailed connection status"""
+        status = {
+            'exists': connection_name in self._connections,
+            'is_connected': False,
+            'has_config': connection_name in self._connection_configs,
+            'error': None
+        }
+        
+        if status['exists']:
+            try:
+                status['is_connected'] = self.is_connected(connection_name)
+            except Exception as e:
+                status['error'] = str(e)
+        
+        return status
+    
     def is_connected(self, connection_name: str) -> bool:
         """Check if connection is active"""
         if connection_name not in self._connections:
@@ -199,13 +220,24 @@ class DatabaseService:
             # Any exception means connection is not usable
             return False
     
-    def reconnect_if_needed(self, connection_name: str) -> None:
+    def reconnect_if_needed(self, connection_name: str) -> bool:
         """Reconnect if connection is lost"""
         if not self.is_connected(connection_name):
             if connection_name in self._connection_configs:
                 config = self._connection_configs[connection_name]
-                self.close_connection(connection_name)
-                self.connect(config, connection_name)
+                self.logger.info("Attempting to reconnect", connection_name=connection_name)
+                try:
+                    self.close_connection(connection_name)
+                    self.connect(config, connection_name)
+                    self.logger.info("Successfully reconnected", connection_name=connection_name)
+                    return True
+                except Exception as e:
+                    self.logger.error("Failed to reconnect", connection_name=connection_name, error=str(e))
+                    return False
+            else:
+                self.logger.error("No configuration found for reconnection", connection_name=connection_name)
+                return False
+        return True
     
     def close_connection(self, connection_name: str = "default") -> None:
         """Close database connection"""

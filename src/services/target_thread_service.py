@@ -194,6 +194,14 @@ class TargetThread:
     def _process_event(self, event: BinlogEvent) -> None:
         """Process a single binlog event"""
         try:
+            # Check target connection before processing
+            if not self._ensure_target_connection():
+                self.logger.warning("Target connection not available, skipping event", 
+                                  target_name=self.target_name,
+                                  schema=event.schema,
+                                  table=event.table)
+                return
+            
             # Get table mapping
             table_mapping = self._get_table_mapping(event.schema, event.table, event.source_name)
             
@@ -353,7 +361,9 @@ class TargetThread:
                             values_count=len(values),
                             target_name=self.target_name)
             
-            result = self.database_service.execute_update(sql, values, self.target_name)
+            result = self._execute_with_retry(
+                self.database_service.execute_update, sql, values, self.target_name
+            )
             
             self.logger.info("INSERT processed successfully", 
                             operation_id=operation_id,
@@ -471,7 +481,9 @@ class TargetThread:
                             values_count=len(values),
                             target_name=self.target_name)
             
-            result = self.database_service.execute_update(sql, values, self.target_name)
+            result = self._execute_with_retry(
+                self.database_service.execute_update, sql, values, self.target_name
+            )
             
             self.logger.info("UPDATE processed successfully", 
                             operation_id=operation_id,
@@ -565,7 +577,9 @@ class TargetThread:
                             values_count=len(values),
                             target_name=self.target_name)
             
-            result = self.database_service.execute_update(sql, values, self.target_name)
+            result = self._execute_with_retry(
+                self.database_service.execute_update, sql, values, self.target_name
+            )
             
             self.logger.info("DELETE processed successfully", 
                             operation_id=operation_id,
@@ -630,7 +644,9 @@ class TargetThread:
                             values_count=len(delete_values),
                             target_name=self.target_name)
             
-            result = self.database_service.execute_update(sql, delete_values, self.target_name)
+            result = self._execute_with_retry(
+                self.database_service.execute_update, sql, delete_values, self.target_name
+            )
             
             self.logger.info("Filtered record deleted successfully", 
                             operation_id=operation_id,
@@ -650,6 +666,70 @@ class TargetThread:
         """Check if shutdown is requested"""
         with self._shutdown_lock:
             return self._shutdown_requested
+    
+    def _ensure_target_connection(self) -> bool:
+        """Ensure target connection is available and reconnect if needed"""
+        try:
+            # Check if connection exists and is valid
+            if not self.database_service.connection_exists(self.target_name):
+                self.logger.warning("Target connection does not exist, attempting to create", 
+                                  target_name=self.target_name)
+                try:
+                    self.database_service.connect(self.target_config, self.target_name)
+                    self.logger.info("Target connection created successfully", 
+                                   target_name=self.target_name)
+                    return True
+                except Exception as e:
+                    self.logger.error("Failed to create target connection", 
+                                    target_name=self.target_name, error=str(e))
+                    return False
+            
+            # Check if connection is still valid and reconnect if needed
+            if not self.database_service.reconnect_if_needed(self.target_name):
+                self.logger.error("Failed to reconnect to target", target_name=self.target_name)
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error("Error ensuring target connection", 
+                            target_name=self.target_name, error=str(e))
+            return False
+    
+    def _execute_with_retry(self, operation_func, *args, **kwargs):
+        """Execute database operation with retry logic"""
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Ensure connection is available before each attempt
+                if not self._ensure_target_connection():
+                    if attempt < max_retries - 1:
+                        self.logger.warning("Connection not available, retrying", 
+                                          target_name=self.target_name,
+                                          attempt=attempt + 1,
+                                          max_retries=max_retries)
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        raise Exception("Target connection not available after all retries")
+                
+                # Execute the operation
+                return operation_func(*args, **kwargs)
+                
+            except Exception as e:
+                self.logger.warning("Database operation failed, retrying", 
+                                  target_name=self.target_name,
+                                  attempt=attempt + 1,
+                                  max_retries=max_retries,
+                                  error=str(e))
+                
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                else:
+                    raise e
 
 
 class TargetThreadService:

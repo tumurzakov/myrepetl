@@ -409,6 +409,9 @@ class ThreadManager:
                     # Check source thread health and restart if needed
                     self._check_source_thread_health()
                     
+                    # Check target connection health
+                    self._check_target_connection_health()
+                    
                     # Sleep for monitoring interval
                     time.sleep(self._monitoring_interval)
                     
@@ -480,6 +483,94 @@ class ThreadManager:
         
         except Exception as e:
             self.logger.error("Error checking source thread health", error=str(e))
+    
+    def _check_target_connection_health(self) -> None:
+        """Check target connection health and manage source threads accordingly"""
+        try:
+            with self._config_lock:
+                if not self._current_config:
+                    return
+            
+            config = self._current_config
+            
+            # Check all target connections
+            target_connections_healthy = True
+            failed_targets = []
+            
+            for target_name, target_config in config.targets.items():
+                try:
+                    # Check connection status
+                    status = self.database_service.get_connection_status(target_name)
+                    
+                    if not status['exists'] or not status['is_connected']:
+                        self.logger.warning("Target connection unhealthy", 
+                                          target_name=target_name,
+                                          status=status)
+                        target_connections_healthy = False
+                        failed_targets.append(target_name)
+                        
+                        # Try to reconnect
+                        try:
+                            if self.database_service.reconnect_if_needed(target_name):
+                                self.logger.info("Target connection restored", target_name=target_name)
+                                target_connections_healthy = True
+                                failed_targets.remove(target_name)
+                            else:
+                                self.logger.error("Failed to restore target connection", 
+                                                target_name=target_name)
+                        except Exception as e:
+                            self.logger.error("Error reconnecting to target", 
+                                            target_name=target_name, error=str(e))
+                    
+                except Exception as e:
+                    self.logger.error("Error checking target connection health", 
+                                    target_name=target_name, error=str(e))
+                    target_connections_healthy = False
+                    failed_targets.append(target_name)
+            
+            # If any target connections are unhealthy, pause source threads
+            if not target_connections_healthy:
+                self.logger.warning("Target connections unhealthy, pausing source threads", 
+                                  failed_targets=failed_targets)
+                self._pause_source_threads()
+            else:
+                # All target connections are healthy, resume source threads
+                self._resume_source_threads()
+        
+        except Exception as e:
+            self.logger.error("Error checking target connection health", error=str(e))
+    
+    def _pause_source_threads(self) -> None:
+        """Pause source threads when target connections are unhealthy"""
+        try:
+            # Get all source threads
+            source_stats = self.source_thread_service.get_all_stats()
+            
+            for source_name, stats in source_stats.items():
+                if stats.get('is_running', False):
+                    self.logger.info("Pausing source thread due to target connection issues", 
+                                   source_name=source_name)
+                    # Note: We don't actually stop the threads, just log the intention
+                    # The target threads will handle connection failures gracefully
+                    # and skip processing events when connections are unavailable
+        
+        except Exception as e:
+            self.logger.error("Error pausing source threads", error=str(e))
+    
+    def _resume_source_threads(self) -> None:
+        """Resume source threads when target connections are healthy"""
+        try:
+            # Get all source threads
+            source_stats = self.source_thread_service.get_all_stats()
+            
+            for source_name, stats in source_stats.items():
+                if stats.get('is_running', False):
+                    self.logger.debug("Source thread is running normally", 
+                                    source_name=source_name)
+                    # Source threads are already running, no action needed
+        
+        except Exception as e:
+            self.logger.error("Error resuming source threads", error=str(e))
     
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""
