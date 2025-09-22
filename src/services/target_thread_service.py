@@ -1284,6 +1284,216 @@ class TargetThread:
         
         return True
     
+    def _process_init_batch_individually(self, operation_id: str, table_key: str, target_table_name: str, 
+                                       batch_data: List[Dict], events: List[InitQueryEvent], first_event: InitQueryEvent) -> None:
+        """Process init batch records individually when batch operation fails due to integrity constraints"""
+        successful_records = 0
+        failed_records = 0
+        
+        self.logger.info("Processing init batch records individually due to integrity constraints", 
+                        operation_id=operation_id,
+                        target_table=target_table_name,
+                        total_records=len(batch_data))
+        
+        for i, (data, event) in enumerate(zip(batch_data, events)):
+            try:
+                # Build individual UPSERT SQL
+                sql, values = SQLBuilder.build_upsert_sql(
+                    target_table_name,
+                    data,
+                    first_event.primary_key
+                )
+                
+                # Execute individual record
+                result = self._execute_with_retry(
+                    self.database_service.execute_update, sql, values, self.target_name
+                )
+                
+                if result is not None:
+                    successful_records += 1
+                    self.logger.debug("Individual init record processed successfully", 
+                                    operation_id=operation_id,
+                                    record_index=i,
+                                    primary_key=data.get(first_event.primary_key))
+                else:
+                    failed_records += 1
+                    self.logger.warning("Individual init record skipped due to integrity constraint", 
+                                      operation_id=operation_id,
+                                      record_index=i,
+                                      primary_key=data.get(first_event.primary_key),
+                                      data_sample={k: v for k, v in list(data.items())[:5]})
+                    
+            except Exception as e:
+                failed_records += 1
+                self.logger.error("Error processing individual init record", 
+                                operation_id=operation_id,
+                                record_index=i,
+                                primary_key=data.get(first_event.primary_key) if data else None,
+                                error=str(e))
+        
+        # Update statistics
+        with self._stats_lock:
+            self._stats['init_batch_operations'] += 1
+            self._stats['init_batch_records_processed'] += successful_records
+            self._stats['init_query_events_processed'] += len(events)
+            self._stats['last_event_time'] = time.time()
+        
+        # Update metrics
+        if self.metrics_service:
+            parts = table_key.split('.')
+            table_name = parts[-1] if parts else table_key
+            self.metrics_service.record_target_batch_size(self.target_name, table_name, successful_records)
+            self.metrics_service.record_target_record_written(
+                self.target_name, table_name, successful_records
+            )
+        
+        self.logger.info("Individual init batch processing completed", 
+                        operation_id=operation_id,
+                        target_table=target_table_name,
+                        successful_records=successful_records,
+                        failed_records=failed_records,
+                        total_records=len(batch_data))
+    
+    def _process_insert_batch_individually(self, operation_id: str, table_key: str, target_table_name: str, 
+                                         batch_data: List[Dict], events: List[InsertEvent], table_mapping) -> None:
+        """Process INSERT batch records individually when batch operation fails due to integrity constraints"""
+        successful_records = 0
+        failed_records = 0
+        
+        self.logger.info("Processing INSERT batch records individually due to integrity constraints", 
+                        operation_id=operation_id,
+                        target_table=target_table_name,
+                        total_records=len(batch_data))
+        
+        for i, (data, event) in enumerate(zip(batch_data, events)):
+            try:
+                # Build individual UPSERT SQL
+                sql, values = SQLBuilder.build_upsert_sql(
+                    target_table_name,
+                    data,
+                    table_mapping.primary_key
+                )
+                
+                # Execute individual record
+                result = self._execute_with_retry(
+                    self.database_service.execute_update, sql, values, self.target_name
+                )
+                
+                if result is not None:
+                    successful_records += 1
+                    self.logger.debug("Individual INSERT record processed successfully", 
+                                    operation_id=operation_id,
+                                    record_index=i,
+                                    primary_key=data.get(table_mapping.primary_key))
+                else:
+                    failed_records += 1
+                    self.logger.warning("Individual INSERT record skipped due to integrity constraint", 
+                                      operation_id=operation_id,
+                                      record_index=i,
+                                      primary_key=data.get(table_mapping.primary_key),
+                                      data_sample={k: v for k, v in list(data.items())[:5]})
+                    
+            except Exception as e:
+                failed_records += 1
+                self.logger.error("Error processing individual INSERT record", 
+                                operation_id=operation_id,
+                                record_index=i,
+                                primary_key=data.get(table_mapping.primary_key) if data else None,
+                                error=str(e))
+        
+        # Update statistics
+        with self._stats_lock:
+            self._stats['batch_operations'] += 1
+            self._stats['batch_records_processed'] += successful_records
+            self._stats['inserts_processed'] += successful_records
+            self._stats['last_event_time'] = time.time()
+        
+        # Update metrics
+        if self.metrics_service:
+            parts = table_key.split('.')
+            table_name = parts[-1] if parts else table_key
+            self.metrics_service.record_target_batch_size(self.target_name, table_name, successful_records)
+            self.metrics_service.record_target_record_written(
+                self.target_name, table_name, successful_records
+            )
+        
+        self.logger.info("Individual INSERT batch processing completed", 
+                        operation_id=operation_id,
+                        target_table=target_table_name,
+                        successful_records=successful_records,
+                        failed_records=failed_records,
+                        total_records=len(batch_data))
+    
+    def _process_update_batch_individually(self, operation_id: str, table_key: str, target_table_name: str, 
+                                         batch_data: List[Dict], events: List[UpdateEvent], table_mapping) -> None:
+        """Process UPDATE batch records individually when batch operation fails due to integrity constraints"""
+        successful_records = 0
+        failed_records = 0
+        
+        self.logger.info("Processing UPDATE batch records individually due to integrity constraints", 
+                        operation_id=operation_id,
+                        target_table=target_table_name,
+                        total_records=len(batch_data))
+        
+        for i, (data, event) in enumerate(zip(batch_data, events)):
+            try:
+                # Build individual UPSERT SQL
+                sql, values = SQLBuilder.build_upsert_sql(
+                    target_table_name,
+                    data,
+                    table_mapping.primary_key
+                )
+                
+                # Execute individual record
+                result = self._execute_with_retry(
+                    self.database_service.execute_update, sql, values, self.target_name
+                )
+                
+                if result is not None:
+                    successful_records += 1
+                    self.logger.debug("Individual UPDATE record processed successfully", 
+                                    operation_id=operation_id,
+                                    record_index=i,
+                                    primary_key=data.get(table_mapping.primary_key))
+                else:
+                    failed_records += 1
+                    self.logger.warning("Individual UPDATE record skipped due to integrity constraint", 
+                                      operation_id=operation_id,
+                                      record_index=i,
+                                      primary_key=data.get(table_mapping.primary_key),
+                                      data_sample={k: v for k, v in list(data.items())[:5]})
+                    
+            except Exception as e:
+                failed_records += 1
+                self.logger.error("Error processing individual UPDATE record", 
+                                operation_id=operation_id,
+                                record_index=i,
+                                primary_key=data.get(table_mapping.primary_key) if data else None,
+                                error=str(e))
+        
+        # Update statistics
+        with self._stats_lock:
+            self._stats['batch_operations'] += 1
+            self._stats['batch_records_processed'] += successful_records
+            self._stats['updates_processed'] += successful_records
+            self._stats['last_event_time'] = time.time()
+        
+        # Update metrics
+        if self.metrics_service:
+            parts = table_key.split('.')
+            table_name = parts[-1] if parts else table_key
+            self.metrics_service.record_target_batch_size(self.target_name, table_name, successful_records)
+            self.metrics_service.record_target_record_written(
+                self.target_name, table_name, successful_records
+            )
+        
+        self.logger.info("Individual UPDATE batch processing completed", 
+                        operation_id=operation_id,
+                        target_table=target_table_name,
+                        successful_records=successful_records,
+                        failed_records=failed_records,
+                        total_records=len(batch_data))
+    
     def _process_batch_events(self, table_key: str, events: List[BinlogEvent]) -> None:
         """Process a batch of events for the same table"""
         if not events:
@@ -1494,10 +1704,13 @@ class TargetThread:
             
             # Check if operation was skipped due to integrity error
             if result is None:
-                self.logger.warning("Init batch operation skipped due to data integrity constraint", 
+                self.logger.warning("Init batch operation failed due to data integrity constraint, trying individual records", 
                                   operation_id=operation_id,
                                   target_name=self.target_name,
                                   batch_size=len(batch_data))
+                
+                # Try to process records individually to identify problematic ones
+                self._process_init_batch_individually(operation_id, table_key, target_table_name, batch_data, events, first_event)
                 return
             
             # Update statistics
@@ -1604,10 +1817,13 @@ class TargetThread:
             
             # Check if operation was skipped due to integrity error
             if result is None:
-                self.logger.warning("INSERT batch operation skipped due to data integrity constraint", 
+                self.logger.warning("INSERT batch operation failed due to data integrity constraint, trying individual records", 
                                   operation_id=operation_id,
                                   target_name=self.target_name,
                                   batch_size=len(batch_data))
+                
+                # Try to process records individually to identify problematic ones
+                self._process_insert_batch_individually(operation_id, table_key, target_table_name, batch_data, events, table_mapping)
                 return
             
             self.logger.info("INSERT batch processed successfully", 
@@ -1692,10 +1908,13 @@ class TargetThread:
             
             # Check if operation was skipped due to integrity error
             if result is None:
-                self.logger.warning("UPDATE batch operation skipped due to data integrity constraint", 
+                self.logger.warning("UPDATE batch operation failed due to data integrity constraint, trying individual records", 
                                   operation_id=operation_id,
                                   target_name=self.target_name,
                                   batch_size=len(batch_data))
+                
+                # Try to process records individually to identify problematic ones
+                self._process_update_batch_individually(operation_id, table_key, target_table_name, batch_data, events, table_mapping)
                 return
             
             self.logger.info("UPDATE batch processed successfully", 
