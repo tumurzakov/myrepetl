@@ -53,6 +53,7 @@ class ReplicationConfig:
     resume_stream: bool = True
     blocking: bool = True
     only_events: Optional[List[str]] = None
+    pause_replication_during_init: bool = False  # Pause replication until init queries complete
     
     def __post_init__(self):
         """Validate configuration after initialization"""

@@ -12,7 +12,7 @@ from src.services.config_service import ConfigService
 from src.services.database_service import DatabaseService
 from src.services.transform_service import TransformService
 from src.services.replication_service import ReplicationService
-from src.models.config import DatabaseConfig, ETLConfig
+from src.models.config import DatabaseConfig, ETLConfig, ReplicationConfig
 from src.exceptions import ConfigurationError, ConnectionError, TransformError, ReplicationError
 
 
@@ -701,3 +701,84 @@ class TestReplicationService:
         
         assert service._streams == {}
         mock_stream.close.assert_called_once()
+
+
+class TestReplicationConfig:
+    """Test ReplicationConfig with new pause_replication_during_init flag"""
+    
+    def test_replication_config_default_values(self):
+        """Test ReplicationConfig default values"""
+        config = ReplicationConfig()
+        
+        assert config.server_id == 100
+        assert config.log_file is None
+        assert config.log_pos == 4
+        assert config.resume_stream is True
+        assert config.blocking is True
+        assert config.only_events is None
+        assert config.pause_replication_during_init is False
+    
+    def test_replication_config_with_pause_flag(self):
+        """Test ReplicationConfig with pause_replication_during_init set to True"""
+        config = ReplicationConfig(pause_replication_during_init=True)
+        
+        assert config.pause_replication_during_init is True
+        assert config.server_id == 100  # Default value should still work
+    
+    def test_replication_config_from_dict(self):
+        """Test ReplicationConfig creation from dictionary"""
+        config_dict = {
+            "server_id": 200,
+            "pause_replication_during_init": True,
+            "log_pos": 8
+        }
+        
+        config = ReplicationConfig(**config_dict)
+        
+        assert config.server_id == 200
+        assert config.pause_replication_during_init is True
+        assert config.log_pos == 8
+        assert config.resume_stream is True  # Default value
+        assert config.blocking is True  # Default value
+    
+    def test_etl_config_with_pause_flag(self):
+        """Test ETLConfig with pause_replication_during_init flag"""
+        config_data = {
+            "sources": {
+                "source1": {
+                    "host": "source_host",
+                    "user": "source_user",
+                    "password": "source_password",
+                    "database": "source_db"
+                }
+            },
+            "targets": {
+                "target1": {
+                    "host": "target_host",
+                    "user": "target_user",
+                    "password": "target_password",
+                    "database": "target_db"
+                }
+            },
+            "replication": {
+                "server_id": 100,
+                "pause_replication_during_init": True
+            },
+            "mapping": {
+                "source1.users": {
+                    "target_table": "target1.users",
+                    "primary_key": "id",
+                    "column_mapping": {
+                        "id": {"column": "id", "primary_key": True}
+                    }
+                }
+            }
+        }
+        
+        config = ETLConfig.from_dict(config_data)
+        
+        assert config.replication.pause_replication_during_init is True
+        assert config.replication.server_id == 100
+        assert len(config.sources) == 1
+        assert len(config.targets) == 1
+        assert len(config.mapping) == 1

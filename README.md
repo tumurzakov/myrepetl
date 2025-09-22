@@ -279,7 +279,8 @@ make test-fast
     "log_file": null,
     "log_pos": 4,
     "resume_stream": true,
-    "blocking": true
+    "blocking": true,
+    "pause_replication_during_init": false
   },
   "monitoring": {
     "enabled": true,
@@ -337,6 +338,7 @@ make test-fast
 - `log_pos`: Позиция в binlog файле
 - `resume_stream`: Продолжить с последней позиции
 - `blocking`: Блокирующий режим чтения
+- `pause_replication_during_init`: Приостановить репликацию до завершения init query (по умолчанию `false`)
 
 #### Mapping (Соответствие)
 Секция `mapping` определяет соответствие между таблицами источников и приемников. Ключ имеет формат `{source_name}.{table_name}`, а значение содержит:
@@ -374,6 +376,12 @@ make test-fast
 4. Результаты каждой порции обрабатываются через mapping и фильтры
 5. Данные вставляются/обновляются в целевой таблице через message bus
 6. Init query выполняется в отдельном потоке параллельно с репликацией
+
+**Контроль запуска репликации:**
+- По умолчанию (`pause_replication_during_init: false`): init query и репликация запускаются параллельно
+- При `pause_replication_during_init: true`: репликация приостанавливается до завершения всех init query
+- После завершения init query система автоматически запускает репликацию
+- Это полезно для обеспечения целостности данных при первичной загрузке
 
 **Защита от потери данных:**
 - При переполнении очереди message bus (>90%) init тред останавливается
@@ -415,6 +423,28 @@ make test-fast
       "target_table": "target1.users",
       "primary_key": "id",
       "init_if_table_empty": false,
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"},
+        "email": {"column": "email"}
+      }
+    }
+  }
+}
+```
+
+**Пример 3: Приостановка репликации до завершения init query**
+```json
+{
+  "replication": {
+    "server_id": 100,
+    "pause_replication_during_init": true
+  },
+  "mapping": {
+    "source1.users": {
+      "init_query": "SELECT * FROM users",
+      "target_table": "target1.users",
+      "primary_key": "id",
       "column_mapping": {
         "id": {"column": "id", "primary_key": true},
         "name": {"column": "name"},

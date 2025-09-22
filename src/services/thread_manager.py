@@ -117,8 +117,13 @@ class ThreadManager:
             # Start init query threads (they run in parallel with replication)
             self._start_init_query_threads(config)
             
-            # Start source threads
-            self._start_source_threads(config)
+            # Check if replication should be paused during init
+            if config.replication.pause_replication_during_init:
+                self.logger.info("Replication paused during init queries - will start after init completion")
+                # Don't start source threads yet - they will be started after init queries complete
+            else:
+                # Start source threads immediately (original behavior)
+                self._start_source_threads(config)
             
             # Start monitoring
             self._start_monitoring()
@@ -448,6 +453,9 @@ class ThreadManager:
                     # Check init query threads and resume if needed
                     self._check_init_query_thread_health()
                     
+                    # Check if replication should be started after init completion
+                    self._check_replication_start_after_init()
+                    
                     # Sleep for monitoring interval
                     time.sleep(self._monitoring_interval)
                     
@@ -648,6 +656,42 @@ class ThreadManager:
         
         except Exception as e:
             self.logger.error("Error resuming source threads", error=str(e))
+    
+    def _check_replication_start_after_init(self) -> None:
+        """Check if replication should be started after init queries complete"""
+        try:
+            with self._config_lock:
+                config = self._current_config
+            
+            if not config:
+                return
+            
+            # Only check if pause_replication_during_init is enabled
+            if not config.replication.pause_replication_during_init:
+                return
+            
+            # Check if any source threads are already running
+            source_stats = self.source_thread_service.get_all_stats()
+            if source_stats:
+                # Source threads are already running, no need to start them
+                return
+            
+            # Check if all init query threads are completed
+            if not self.init_query_thread_service.are_all_completed():
+                # Some init queries are still running, wait
+                return
+            
+            # All init queries are completed, start source threads
+            self.logger.info("All init queries completed, starting replication threads")
+            
+            try:
+                self._start_source_threads(config)
+                self.logger.info("Replication threads started successfully after init completion")
+            except Exception as e:
+                self.logger.error("Failed to start replication threads after init completion", error=str(e))
+        
+        except Exception as e:
+            self.logger.error("Error checking replication start after init", error=str(e))
     
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""
