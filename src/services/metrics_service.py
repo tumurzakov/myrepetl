@@ -20,6 +20,7 @@ class MetricsService:
         self.logger = structlog.get_logger()
         self.registry = registry or CollectorRegistry()
         self.thread_manager = None  # Will be set later
+        self.database_service = None  # Will be set later
         
         # Initialize all metrics
         self._init_metrics()
@@ -29,6 +30,10 @@ class MetricsService:
     def set_thread_manager(self, thread_manager) -> None:
         """Set thread manager reference for health checks"""
         self.thread_manager = thread_manager
+    
+    def set_database_service(self, database_service) -> None:
+        """Set database service reference for health checks"""
+        self.database_service = database_service
     
     def _init_metrics(self) -> None:
         """Initialize all Prometheus metrics"""
@@ -683,12 +688,86 @@ class MetricsService:
     def _get_database_health(self) -> Dict[str, Any]:
         """Get database connection health status"""
         db_health = {
-            "sources": {"status": "unknown", "connections": []},
-            "targets": {"status": "unknown", "connections": []}
+            "sources": {"status": "unknown", "connections": [], "total": 0, "connected": 0},
+            "targets": {"status": "unknown", "connections": [], "total": 0, "connected": 0}
         }
         
+        # Try to get real connection status from DatabaseService first
+        if self.database_service:
+            try:
+                all_connections = self.database_service.get_all_connection_status()
+                
+                source_connections = 0
+                target_connections = 0
+                source_total = 0
+                target_total = 0
+                
+                for connection_name, status in all_connections.items():
+                    # Determine connection type based on name or config
+                    # This is a heuristic - in real implementation you might want to pass connection type
+                    if "source" in connection_name.lower() or connection_name in ["source1", "source2"]:
+                        source_total += 1
+                        if status.get('is_connected', False):
+                            source_connections += 1
+                            db_health["sources"]["connections"].append({
+                                "name": connection_name,
+                                "status": "connected",
+                                "exists": status.get('exists', False),
+                                "has_config": status.get('has_config', False),
+                                "error": status.get('error')
+                            })
+                        else:
+                            db_health["sources"]["connections"].append({
+                                "name": connection_name,
+                                "status": "disconnected",
+                                "exists": status.get('exists', False),
+                                "has_config": status.get('has_config', False),
+                                "error": status.get('error')
+                            })
+                    else:
+                        target_total += 1
+                        if status.get('is_connected', False):
+                            target_connections += 1
+                            db_health["targets"]["connections"].append({
+                                "name": connection_name,
+                                "status": "connected",
+                                "exists": status.get('exists', False),
+                                "has_config": status.get('has_config', False),
+                                "error": status.get('error')
+                            })
+                        else:
+                            db_health["targets"]["connections"].append({
+                                "name": connection_name,
+                                "status": "disconnected",
+                                "exists": status.get('exists', False),
+                                "has_config": status.get('has_config', False),
+                                "error": status.get('error')
+                            })
+                
+                db_health["sources"]["total"] = source_total
+                db_health["sources"]["connected"] = source_connections
+                db_health["targets"]["total"] = target_total
+                db_health["targets"]["connected"] = target_connections
+                
+                # Determine overall status
+                if source_total > 0:
+                    db_health["sources"]["status"] = "healthy" if source_connections == source_total else "warning"
+                else:
+                    db_health["sources"]["status"] = "unknown"
+                    
+                if target_total > 0:
+                    db_health["targets"]["status"] = "healthy" if target_connections == target_total else "warning"
+                else:
+                    db_health["targets"]["status"] = "unknown"
+                
+                return db_health
+                
+            except Exception as e:
+                self.logger.warning("Failed to get database status from DatabaseService", error=str(e))
+        
+        # Fallback to metrics-based approach
         try:
-            # Get source connections
+            # Get source connections from metrics
             source_connections = 0
             source_total = 0
             for sample in self.database_connection_status.collect()[0].samples:

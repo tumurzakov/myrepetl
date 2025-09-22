@@ -238,6 +238,18 @@ class DatabaseService:
         
         return status
     
+    def get_all_connection_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get status of all database connections"""
+        all_status = {}
+        
+        # Get all connection names from both connections and configs
+        all_connection_names = set(self._connections.keys()) | set(self._connection_configs.keys())
+        
+        for connection_name in all_connection_names:
+            all_status[connection_name] = self.get_connection_status(connection_name)
+        
+        return all_status
+    
     def is_connected(self, connection_name: str) -> bool:
         """Check if connection is active"""
         if connection_name not in self._connections:
