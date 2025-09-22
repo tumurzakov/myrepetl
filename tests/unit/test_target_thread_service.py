@@ -650,6 +650,7 @@ class TestTargetThreadService:
         """Test batch processing initialization"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 50
+        target_config.batch_flush_interval = 3.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -667,13 +668,14 @@ class TestTargetThreadService:
         )
         
         assert thread._batch_size == 50
+        assert thread._batch_flush_interval == 3.0
         assert thread._batch_accumulator == {}
-        assert thread._batch_flush_interval == 1.0
     
     def test_get_table_key(self):
         """Test getting table key for batching"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -704,6 +706,7 @@ class TestTargetThreadService:
         """Test adding INSERT event to batch"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 2  # Small batch size for testing
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -753,6 +756,7 @@ class TestTargetThreadService:
         """Test that DELETE events are not batched"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -785,6 +789,7 @@ class TestTargetThreadService:
         """Test batch flushing based on time interval"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 100
+        target_config.batch_flush_interval = 2.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -801,16 +806,44 @@ class TestTargetThreadService:
             config=config
         )
         
-        # Set last flush time to 2 seconds ago
-        thread._last_batch_flush = time.time() - 2.0
+        # Set last flush time to 3 seconds ago (exceeds 2.0 second interval)
+        thread._last_batch_flush = time.time() - 3.0
         
         result = thread._should_flush_batches()
         assert result is True
+    
+    def test_should_not_flush_batches_before_time_interval(self):
+        """Test that batches are not flushed before time interval"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Set last flush time to 2 seconds ago (less than 5.0 second interval)
+        thread._last_batch_flush = time.time() - 2.0
+        
+        result = thread._should_flush_batches()
+        assert result is False
     
     def test_should_flush_batches_size_limit(self):
         """Test batch flushing based on size limit"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 2
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -852,6 +885,7 @@ class TestTargetThreadService:
         """Test flushing all batches"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -896,6 +930,7 @@ class TestTargetThreadService:
         """Test batch statistics tracking"""
         target_config = Mock(spec=DatabaseConfig)
         target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()

@@ -18,6 +18,7 @@ class DatabaseConfig:
     charset: str = "utf8mb4"
     autocommit: bool = False
     batch_size: int = 100  # Batch size for batch operations
+    batch_flush_interval: float = 5.0  # Batch flush interval in seconds
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -33,6 +34,8 @@ class DatabaseConfig:
             raise ConfigurationError("Port must be between 1 and 65535")
         if self.batch_size <= 0:
             raise ConfigurationError("Batch size must be positive")
+        if self.batch_flush_interval <= 0:
+            raise ConfigurationError("Batch flush interval must be positive")
     
     def to_connection_params(self) -> Dict[str, Any]:
         """Convert to pymysql connection parameters"""

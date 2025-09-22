@@ -47,10 +47,10 @@ class TargetThread:
         
         # Batch processing
         self._batch_size = target_config.batch_size
+        self._batch_flush_interval = target_config.batch_flush_interval
         self._batch_accumulator = {}  # {table_key: [events]}
         self._batch_lock = threading.Lock()
         self._last_batch_flush = time.time()
-        self._batch_flush_interval = 1.0  # Flush batches every 1 second
         
         # Statistics
         self._stats = {
@@ -180,6 +180,8 @@ class TargetThread:
                     
                     # Check if we should flush batches
                     if self._should_flush_batches():
+                        self.logger.debug("Time interval reached, flushing batches", 
+                                        target_name=self.target_name)
                         self._flush_all_batches()
                     
                     # Log queue statistics every 30 seconds
@@ -191,6 +193,8 @@ class TargetThread:
                 except Empty:
                     # Timeout reached, check if we should flush batches and continue
                     if self._should_flush_batches():
+                        self.logger.debug("Timeout reached, flushing batches", 
+                                        target_name=self.target_name)
                         self._flush_all_batches()
                     continue
                 except Exception as e:
@@ -998,8 +1002,19 @@ class TargetThread:
             if not self._batch_accumulator:
                 return
             
+            total_events = sum(len(events) for events in self._batch_accumulator.values())
+            if total_events > 0:
+                self.logger.info("Flushing all accumulated batches", 
+                                target_name=self.target_name,
+                                total_batches=len(self._batch_accumulator),
+                                total_events=total_events)
+            
             for table_key, events in self._batch_accumulator.items():
                 if events:
+                    self.logger.debug("Flushing batch for table", 
+                                    table_key=table_key,
+                                    batch_size=len(events),
+                                    target_name=self.target_name)
                     self._process_batch_events(table_key, events)
             
             # Clear all batches
@@ -1020,11 +1035,26 @@ class TargetThread:
             
             self._batch_accumulator[table_key].append(event)
             
+            # Log batch accumulation progress
+            current_batch_size = len(self._batch_accumulator[table_key])
+            if current_batch_size % 10 == 0 or current_batch_size == 1:  # Log every 10 events or first event
+                self.logger.debug("Event added to batch", 
+                                table_key=table_key,
+                                current_batch_size=current_batch_size,
+                                batch_size_limit=self._batch_size,
+                                event_type=type(event).__name__,
+                                target_name=self.target_name)
+            
             # If batch is full, flush it
             if len(self._batch_accumulator[table_key]) >= self._batch_size:
                 events_to_process = self._batch_accumulator[table_key].copy()
                 self._batch_accumulator[table_key].clear()
                 self._last_batch_flush = time.time()
+                
+                self.logger.debug("Batch size limit reached, processing batch", 
+                                table_key=table_key,
+                                batch_size=len(events_to_process),
+                                target_name=self.target_name)
                 
                 # Process the full batch
                 self._process_batch_events(table_key, events_to_process)
@@ -1077,10 +1107,12 @@ class TargetThread:
             self.logger.info("Processing batch events", 
                             operation_id=operation_id,
                             table_key=table_key,
+                            target_table=target_table_name,
                             target_name=self.target_name,
                             total_events=len(events),
                             insert_events=len(insert_events),
-                            update_events=len(update_events))
+                            update_events=len(update_events),
+                            batch_size=self._batch_size)
             
             # Process INSERT batch
             if insert_events:
@@ -1150,11 +1182,23 @@ class TargetThread:
                 table_mapping.primary_key
             )
             
+            # Log detailed batch information
+            primary_keys = [row.get(table_mapping.primary_key) for row in batch_data]
             self.logger.info("Executing batch UPSERT for INSERT", 
                             operation_id=operation_id,
+                            target_table=target_table_name,
                             sql=sql,
                             batch_size=len(batch_data),
+                            primary_keys=primary_keys[:10],  # Log first 10 primary keys
+                            total_primary_keys=len(primary_keys),
                             target_name=self.target_name)
+            
+            # Log SQL statement in debug mode for troubleshooting
+            self.logger.debug("Batch UPSERT SQL statement", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(values_list),
+                            first_row_values=values_list[0] if values_list else None)
             
             result = self._execute_with_retry(
                 self.database_service.execute_batch, sql, values_list, self.target_name
@@ -1162,8 +1206,10 @@ class TargetThread:
             
             self.logger.info("INSERT batch processed successfully", 
                             operation_id=operation_id,
+                            target_table=target_table_name,
                             batch_size=len(batch_data),
                             affected_rows=result,
+                            primary_keys=primary_keys[:10],
                             target_name=self.target_name)
             
         except Exception as e:
@@ -1215,11 +1261,23 @@ class TargetThread:
                 table_mapping.primary_key
             )
             
+            # Log detailed batch information
+            primary_keys = [row.get(table_mapping.primary_key) for row in batch_data]
             self.logger.info("Executing batch UPSERT for UPDATE", 
                             operation_id=operation_id,
+                            target_table=target_table_name,
                             sql=sql,
                             batch_size=len(batch_data),
+                            primary_keys=primary_keys[:10],  # Log first 10 primary keys
+                            total_primary_keys=len(primary_keys),
                             target_name=self.target_name)
+            
+            # Log SQL statement in debug mode for troubleshooting
+            self.logger.debug("Batch UPSERT SQL statement", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(values_list),
+                            first_row_values=values_list[0] if values_list else None)
             
             result = self._execute_with_retry(
                 self.database_service.execute_batch, sql, values_list, self.target_name
@@ -1227,8 +1285,10 @@ class TargetThread:
             
             self.logger.info("UPDATE batch processed successfully", 
                             operation_id=operation_id,
+                            target_table=target_table_name,
                             batch_size=len(batch_data),
                             affected_rows=result,
+                            primary_keys=primary_keys[:10],
                             target_name=self.target_name)
             
         except Exception as e:
@@ -1262,7 +1322,8 @@ class TargetThread:
                         init_query_events_processed=stats['init_query_events_processed'],
                         batch_operations=stats['batch_operations'],
                         batch_records_processed=stats['batch_records_processed'],
-                        batch_size=self._batch_size)
+                        batch_size=self._batch_size,
+                        batch_flush_interval=self._batch_flush_interval)
     
     def _ensure_target_connection(self) -> bool:
         """Ensure target connection is available and reconnect if needed"""
