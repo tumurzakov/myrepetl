@@ -538,8 +538,10 @@ class TargetThread:
                 event.primary_key
             )
             
-            # Execute the UPSERT
-            self.database_service.execute_update(sql, values, self.target_name)
+            # Execute the UPSERT with retry logic
+            result = self._execute_with_retry(
+                self.database_service.execute_update, sql, values, self.target_name
+            )
             
             # Update statistics
             with self._stats_lock:
@@ -996,6 +998,8 @@ class TargetThread:
     
     def _execute_with_retry(self, operation_func, *args, **kwargs):
         """Execute database operation with retry logic"""
+        import pymysql.err
+        
         max_retries = 3
         retry_delay = 1.0
         
@@ -1016,18 +1020,38 @@ class TargetThread:
                 # Execute the operation
                 return operation_func(*args, **kwargs)
                 
-            except Exception as e:
-                self.logger.warning("Database operation failed, retrying", 
+            except (pymysql.err.OperationalError, pymysql.err.InternalError, 
+                    pymysql.err.InterfaceError) as e:
+                # MySQL-specific connection errors - these are retryable
+                error_code = getattr(e, 'args', [None])[0] if e.args else None
+                self.logger.warning("MySQL connection error, retrying", 
                                   target_name=self.target_name,
                                   attempt=attempt + 1,
                                   max_retries=max_retries,
-                                  error=str(e))
+                                  error_type=type(e).__name__,
+                                  error_code=error_code,
+                                  error_message=str(e))
                 
                 if attempt < max_retries - 1:
+                    # Force connection cleanup and recreation on MySQL errors
+                    try:
+                        self.database_service.close_connection(self.target_name)
+                    except Exception:
+                        pass  # Ignore cleanup errors
                     time.sleep(retry_delay * (attempt + 1))
                     continue
                 else:
                     raise e
+                    
+            except Exception as e:
+                # Other errors - log but don't retry
+                self.logger.error("Non-retryable database operation error", 
+                                target_name=self.target_name,
+                                attempt=attempt + 1,
+                                max_retries=max_retries,
+                                error_type=type(e).__name__,
+                                error=str(e))
+                raise e
 
 
 class TargetThreadService:

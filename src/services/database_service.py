@@ -3,6 +3,7 @@ Database service for MySQL Replication ETL
 """
 
 import pymysql
+import pymysql.err
 from typing import Dict, Any, Optional, Tuple
 from contextlib import contextmanager
 
@@ -28,7 +29,11 @@ class DatabaseService:
                 'connect_timeout': 10,
                 'read_timeout': 30,
                 'write_timeout': 30,
-                'autocommit': True
+                'autocommit': True,
+                'charset': 'utf8mb4',
+                'use_unicode': True,
+                'sql_mode': 'TRADITIONAL',
+                'init_command': "SET SESSION wait_timeout=28800, interactive_timeout=28800"
             })
             connection = pymysql.connect(**connection_params)
             self._connections[connection_name] = connection
@@ -120,7 +125,11 @@ class DatabaseService:
                 'connect_timeout': 10,
                 'read_timeout': 30,
                 'write_timeout': 30,
-                'autocommit': True
+                'autocommit': True,
+                'charset': 'utf8mb4',
+                'use_unicode': True,
+                'sql_mode': 'TRADITIONAL',
+                'init_command': "SET SESSION wait_timeout=28800, interactive_timeout=28800"
             })
             connection = pymysql.connect(**connection_params)
             
@@ -213,10 +222,21 @@ class DatabaseService:
             # Check if connection has a valid socket
             if hasattr(connection, '_sock') and connection._sock is None:
                 return False
+            
             # Test the connection with a simple ping (with timeout)
+            # Use a very short timeout to avoid hanging
             connection.ping(reconnect=False)
             return True
-        except (ConnectionError, OSError, IOError, AttributeError, pymysql.Error, Exception):
+        except (pymysql.err.OperationalError, pymysql.err.InternalError, 
+                pymysql.err.InterfaceError, pymysql.err.DatabaseError,
+                ConnectionError, OSError, IOError, AttributeError, Exception) as e:
+            # Log specific MySQL errors for debugging
+            if isinstance(e, (pymysql.err.OperationalError, pymysql.err.InternalError)):
+                self.logger.debug("MySQL connection error detected", 
+                                connection_name=connection_name, 
+                                error_type=type(e).__name__,
+                                error_code=getattr(e, 'args', [None])[0] if e.args else None,
+                                error_message=str(e))
             # Any exception means connection is not usable
             return False
     

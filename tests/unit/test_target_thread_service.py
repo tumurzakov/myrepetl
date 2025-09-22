@@ -607,6 +607,8 @@ class TestTargetThreadService:
     
     def test_execute_with_retry_operation_failure(self):
         """Test execution with retry when operation fails"""
+        import pymysql.err
+        
         target_config = Mock(spec=DatabaseConfig)
         message_bus = Mock()
         database_service = Mock()
@@ -626,11 +628,21 @@ class TestTargetThreadService:
             config=config
         )
         
-        mock_operation = Mock(side_effect=Exception("Operation failed"))
+        # Test with MySQL-specific error (retryable)
+        mock_operation = Mock(side_effect=pymysql.err.OperationalError(2006, "MySQL server has gone away"))
         
-        with pytest.raises(Exception, match="Operation failed"):
+        with pytest.raises(pymysql.err.OperationalError):
             thread._execute_with_retry(mock_operation, "arg1")
         
-        # Should have tried 3 times
+        # Should have tried 3 times for MySQL errors
         assert mock_operation.call_count == 3
+        
+        # Test with generic exception (non-retryable)
+        mock_operation2 = Mock(side_effect=Exception("Operation failed"))
+        
+        with pytest.raises(Exception, match="Operation failed"):
+            thread._execute_with_retry(mock_operation2, "arg1")
+        
+        # Should have tried only 1 time for generic exceptions
+        assert mock_operation2.call_count == 1
 

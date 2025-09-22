@@ -53,6 +53,11 @@ class TestThreadManager:
             config = Mock(spec=ETLConfig)
             config.mapping = {}  # Add mapping attribute
             
+            # Mock replication config
+            replication_config = Mock()
+            replication_config.pause_replication_during_init = False
+            config.replication = replication_config
+            
             manager.start(config)
             
             assert manager.get_status() == ServiceStatus.RUNNING
