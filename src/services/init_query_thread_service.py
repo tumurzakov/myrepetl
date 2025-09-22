@@ -317,7 +317,13 @@ class InitQueryThread:
         if not self._is_shutdown_requested():
             self._mark_completion('completed_successfully')
             
-            self.logger.info("Init query processing completed", 
+            self.logger.info("Init query processing completed successfully", 
+                           mapping_key=self.mapping_key, 
+                           total_processed=self._stats['rows_processed'],
+                           pages_processed=self._stats['pages_processed'],
+                           completion_reason='completed_successfully')
+        else:
+            self.logger.warning("Init query processing stopped due to shutdown request", 
                            mapping_key=self.mapping_key, 
                            total_processed=self._stats['rows_processed'],
                            pages_processed=self._stats['pages_processed'])
@@ -557,9 +563,20 @@ class InitQueryThread:
     def _finalize_run_state(self) -> None:
         """Finalize run state after thread execution"""
         with self._stats_lock:
+            is_completed = self._stats.get('is_completed', False)
+            completion_reason = self._stats.get('completion_reason', 'unknown')
+            
+            # Log the finalization details
+            self.logger.info("Finalizing init query thread run state", 
+                           mapping_key=self.mapping_key,
+                           is_completed=is_completed,
+                           completion_reason=completion_reason,
+                           rows_processed=self._stats.get('rows_processed', 0),
+                           shutdown_requested=self._is_shutdown_requested())
+            
             # Only set is_running to False if not already completed
             # This preserves the completion state set by error handlers
-            if not self._stats.get('is_completed', False):
+            if not is_completed:
                 self._stats['is_running'] = False
             else:
                 # If already completed, just update activity time
@@ -605,7 +622,9 @@ class InitQueryThread:
                                 mapping_key=self.mapping_key,
                                 queue_usage_percent=queue_usage_percent,
                                 queue_size=queue_size,
-                                max_queue_size=self.message_bus.max_queue_size)
+                                max_queue_size=self.message_bus.max_queue_size,
+                                attempt=attempt + 1,
+                                max_retries=max_retries + 1)
                 return False
             
             # If not the last attempt and queue is not critically full, wait before retrying
