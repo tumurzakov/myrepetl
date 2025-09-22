@@ -401,7 +401,7 @@ class TargetThread:
                                   message_source=message.source)
                 return
             
-            self.logger.info("Processing init query event directly", 
+            self.logger.debug("Processing init query event directly", 
                             target_name=self.target_name,
                             event_id=getattr(event_data, 'event_id', None),
                             mapping_key=getattr(event_data, 'mapping_key', None),
