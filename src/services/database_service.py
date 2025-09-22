@@ -59,15 +59,15 @@ class DatabaseService:
             
             connection = self._connections[connection_name]
             if connection is None:
-                # Clean up None connection atomically
-                self._remove_connection_atomic(connection_name)
+                # Clean up None connection but keep config for reconnection
+                self._remove_connection_only_atomic(connection_name)
                 raise ConnectionError(f"Connection '{connection_name}' is None")
             
             # Check if connection is still valid
             if not self.is_connected(connection_name):
-                self.logger.warning("Connection is no longer valid, removing from pool", 
+                self.logger.warning("Connection is no longer valid, removing from pool but keeping config", 
                                   connection_name=connection_name)
-                self._remove_connection_atomic(connection_name)
+                self._remove_connection_only_atomic(connection_name)
                 raise ConnectionError(f"Connection '{connection_name}' is no longer valid")
             
             return connection

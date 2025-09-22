@@ -298,9 +298,14 @@ class InitQueryThread:
                                 error=str(e))
                 raise
             finally:
-                # Close source connection
+                # Close source connection but keep config for potential reuse
                 try:
-                    self.database_service.close_connection(source_connection_name)
+                    if source_connection_name in self.database_service._connections:
+                        connection = self.database_service._connections[source_connection_name]
+                        if connection:
+                            connection.close()
+                        # Remove only connection, keep config
+                        self.database_service._remove_connection_only_atomic(source_connection_name)
                 except Exception as e:
                     self.logger.warning("Error closing source connection", 
                                       connection_name=source_connection_name, 
