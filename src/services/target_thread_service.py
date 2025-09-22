@@ -180,8 +180,16 @@ class TargetThread:
                     
                     # Check if we should flush batches
                     if self._should_flush_batches():
-                        self.logger.debug("Time interval reached, flushing batches", 
-                                        target_name=self.target_name)
+                        # Count total events in all batches before flushing
+                        with self._batch_lock:
+                            total_events = sum(len(events) for events in self._batch_accumulator.values())
+                            total_batches = len(self._batch_accumulator)
+                        
+                        if total_events > 0:
+                            self.logger.info("Time interval reached, flushing batches", 
+                                            target_name=self.target_name,
+                                            total_batches=total_batches,
+                                            total_events=total_events)
                         self._flush_all_batches()
                     
                     # Log queue statistics every 30 seconds
@@ -193,8 +201,16 @@ class TargetThread:
                 except Empty:
                     # Timeout reached, check if we should flush batches and continue
                     if self._should_flush_batches():
-                        self.logger.debug("Timeout reached, flushing batches", 
-                                        target_name=self.target_name)
+                        # Count total events in all batches before flushing
+                        with self._batch_lock:
+                            total_events = sum(len(events) for events in self._batch_accumulator.values())
+                            total_batches = len(self._batch_accumulator)
+                        
+                        if total_events > 0:
+                            self.logger.info("Timeout reached, flushing batches", 
+                                            target_name=self.target_name,
+                                            total_batches=total_batches,
+                                            total_events=total_events)
                         self._flush_all_batches()
                     continue
                 except Exception as e:
@@ -1011,8 +1027,17 @@ class TargetThread:
             
             for table_key, events in self._batch_accumulator.items():
                 if events:
-                    self.logger.debug("Flushing batch for table", 
+                    # Parse table key to get source, schema, and table
+                    parts = table_key.split('.')
+                    if len(parts) >= 3:
+                        source_name, schema, table = parts[0], parts[1], parts[2]
+                        table_info = f"{source_name}.{schema}.{table}"
+                    else:
+                        table_info = table_key
+                    
+                    self.logger.info("Flushing batch for table", 
                                     table_key=table_key,
+                                    table_info=table_info,
                                     batch_size=len(events),
                                     target_name=self.target_name)
                     self._process_batch_events(table_key, events)
@@ -1051,8 +1076,17 @@ class TargetThread:
                 self._batch_accumulator[table_key].clear()
                 self._last_batch_flush = time.time()
                 
-                self.logger.debug("Batch size limit reached, processing batch", 
+                # Parse table key for better logging
+                parts = table_key.split('.')
+                if len(parts) >= 3:
+                    source_name, schema, table = parts[0], parts[1], parts[2]
+                    table_info = f"{source_name}.{schema}.{table}"
+                else:
+                    table_info = table_key
+                
+                self.logger.info("Batch size limit reached, processing batch", 
                                 table_key=table_key,
+                                table_info=table_info,
                                 batch_size=len(events_to_process),
                                 target_name=self.target_name)
                 
@@ -1133,11 +1167,23 @@ class TargetThread:
                 self._stats['events_processed'] += len(events)
                 self._stats['last_event_time'] = time.time()
             
+            # Parse table key for better logging
+            parts = table_key.split('.')
+            if len(parts) >= 3:
+                source_name, schema, table = parts[0], parts[1], parts[2]
+                table_info = f"{source_name}.{schema}.{table}"
+            else:
+                table_info = table_key
+            
             self.logger.info("Batch events processed successfully", 
                             operation_id=operation_id,
                             table_key=table_key,
+                            table_info=table_info,
+                            target_table=target_table_name,
                             target_name=self.target_name,
-                            total_events=len(events))
+                            total_events=len(events),
+                            insert_events=len(insert_events),
+                            update_events=len(update_events))
             
         except Exception as e:
             self.logger.error("Error processing batch events", 
@@ -1210,6 +1256,7 @@ class TargetThread:
                             batch_size=len(batch_data),
                             affected_rows=result,
                             primary_keys=primary_keys[:10],
+                            total_primary_keys=len(primary_keys),
                             target_name=self.target_name)
             
         except Exception as e:
@@ -1289,6 +1336,7 @@ class TargetThread:
                             batch_size=len(batch_data),
                             affected_rows=result,
                             primary_keys=primary_keys[:10],
+                            total_primary_keys=len(primary_keys),
                             target_name=self.target_name)
             
         except Exception as e:
