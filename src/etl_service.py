@@ -29,7 +29,7 @@ class ETLService:
         self._shutdown_requested = False
         
         # Core services for dependency injection
-        self.message_bus = MessageBus(max_queue_size=10000)
+        self.message_bus = MessageBus(max_queue_size=50000)
         self.database_service = DatabaseService()
         self.transform_service = TransformService()
         self.filter_service = FilterService()

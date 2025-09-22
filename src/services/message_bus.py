@@ -129,7 +129,9 @@ class MessageBus:
             self.logger.warning("Message queue is full, dropping message", 
                                message_type=message.message_type.value,
                                source=message.source,
-                               queue_size=self._message_queue.qsize())
+                               queue_size=self._message_queue.qsize(),
+                               max_queue_size=self.max_queue_size,
+                               queue_usage_percent=(self._message_queue.qsize() / self.max_queue_size) * 100)
             return False
     
     def publish_binlog_event(self, source: str, event: BinlogEvent, target: str = None) -> bool:

@@ -124,7 +124,8 @@ class TestETLService:
             mock_thread_manager.return_value.get_stats.return_value = Mock(
                 status=ServiceStatus.RUNNING,
                 uptime=10.0,
-                total_events_processed=5
+                total_events_processed=5,
+                init_query_threads_count=0
             )
             
             # Mock config
@@ -146,7 +147,7 @@ class TestETLService:
             service.run_replication()
             
             mock_thread_manager.return_value.start.assert_called_once_with(mock_config, None)
-            mock_init_queries.assert_called_once()
+            # Note: execute_init_queries is no longer called directly as init queries are handled by ThreadManager
             mock_thread_manager.return_value.stop.assert_called_once()
     
     def test_run_replication_keyboard_interrupt(self):
@@ -160,7 +161,8 @@ class TestETLService:
             mock_thread_manager.return_value.get_stats.return_value = Mock(
                 status=ServiceStatus.RUNNING,
                 uptime=10.0,
-                total_events_processed=5
+                total_events_processed=5,
+                init_query_threads_count=0
             )
             
             # Mock config
@@ -183,7 +185,7 @@ class TestETLService:
             service.run_replication()
             
             mock_thread_manager.return_value.start.assert_called_once_with(mock_config, None)
-            mock_init_queries.assert_called_once()
+            # Note: execute_init_queries is no longer called directly as init queries are handled by ThreadManager
     
     def test_run_replication_error(self):
         """Test replication run with error"""

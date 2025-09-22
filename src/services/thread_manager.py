@@ -445,15 +445,59 @@ class ThreadManager:
                     # Check target connection health
                     self._check_target_connection_health()
                     
+                    # Check init query threads and resume if needed
+                    self._check_init_query_thread_health()
+                    
                     # Sleep for monitoring interval
                     time.sleep(self._monitoring_interval)
                     
                 except Exception as e:
-                    self.logger.error("Error in monitoring worker", error=str(e))
+                    self.logger.error("Error in monitoring loop iteration", error=str(e))
                     time.sleep(self._monitoring_interval)
                     
         except Exception as e:
             self.logger.error("Fatal error in monitoring worker", error=str(e))
+    
+    def _check_init_query_thread_health(self) -> None:
+        """Check init query thread health and resume if needed"""
+        try:
+            with self._config_lock:
+                config = self._current_config
+            
+            if not config:
+                return
+            
+            # Get incomplete threads
+            incomplete_threads = self.init_query_thread_service.get_incomplete_threads()
+            
+            if incomplete_threads:
+                self.logger.info("Found incomplete init query threads, attempting to resume", 
+                               incomplete_count=len(incomplete_threads),
+                               incomplete_threads=incomplete_threads)
+                
+                # Check message bus queue size before resuming
+                queue_size = self.message_bus.get_queue_size()
+                queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
+                
+                if queue_usage_percent < 50:  # Only resume if queue is less than 50% full
+                    for mapping_key in incomplete_threads:
+                        try:
+                            success = self.init_query_thread_service.resume_init_query_thread(mapping_key, config)
+                            if success:
+                                self.logger.info("Successfully resumed init query thread", mapping_key=mapping_key)
+                            else:
+                                self.logger.warning("Failed to resume init query thread", mapping_key=mapping_key)
+                        except Exception as e:
+                            self.logger.error("Error resuming init query thread", 
+                                            mapping_key=mapping_key, error=str(e))
+                else:
+                    self.logger.warning("Message bus queue too full to resume init query threads", 
+                                      queue_usage_percent=queue_usage_percent,
+                                      queue_size=queue_size,
+                                      max_queue_size=self.message_bus.max_queue_size)
+        
+        except Exception as e:
+            self.logger.error("Error checking init query thread health", error=str(e))
     
     def _check_source_thread_health(self) -> None:
         """Check source thread health and restart failed threads"""

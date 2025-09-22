@@ -51,6 +51,7 @@ class TestThreadManager:
             
             manager = self._create_manager()
             config = Mock(spec=ETLConfig)
+            config.mapping = {}  # Add mapping attribute
             
             manager.start(config)
             
@@ -329,11 +330,13 @@ class TestThreadManager:
             uptime=10.0,
             sources_count=2,
             targets_count=1,
+            init_query_threads_count=1,
             total_events_processed=100,
             total_errors=0,
             message_bus_stats={"messages_sent": 50},
             source_stats={"source1": {"events_processed": 50}},
-            target_stats={"target1": {"events_processed": 50}}
+            target_stats={"target1": {"events_processed": 50}},
+            init_query_stats={"mapping1": {"rows_processed": 25}}
         )
         
         assert stats.status == ServiceStatus.RUNNING

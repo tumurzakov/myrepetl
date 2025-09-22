@@ -336,6 +336,58 @@ class DatabaseService:
         except Exception as e:
             raise ConnectionError(f"Error executing init query: {e}")
     
+    def execute_init_query_paginated(self, query: str, connection_name: str = "default", 
+                                   page_size: int = 1000, offset: int = 0) -> Tuple[list, list, bool]:
+        """Execute init query with pagination and return results with column names and has_more flag"""
+        try:
+            with self.get_cursor(connection_name) as cursor:
+                # Add LIMIT and OFFSET to the query
+                paginated_query = f"{query} LIMIT {page_size} OFFSET {offset}"
+                cursor.execute(paginated_query)
+                results = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                
+                # Check if there are more results
+                has_more = len(results) == page_size
+                
+                return results, columns, has_more
+        except Exception as e:
+            raise ConnectionError(f"Error executing paginated init query: {e}")
+    
+    def get_init_query_total_count(self, query: str, connection_name: str = "default") -> int:
+        """Get total count of records that would be returned by init query"""
+        try:
+            # Convert SELECT query to COUNT query
+            # Remove ORDER BY clause if present as it's not needed for count
+            count_query = query.lower()
+            if ' order by ' in count_query:
+                count_query = count_query.split(' order by ')[0]
+            
+            # Replace SELECT ... FROM with SELECT COUNT(*) FROM
+            if count_query.startswith('select '):
+                # Find the FROM clause
+                from_index = count_query.find(' from ')
+                if from_index != -1:
+                    count_query = f"SELECT COUNT(*) FROM {count_query[from_index + 6:]}"
+                else:
+                    # Fallback: wrap the entire query
+                    count_query = f"SELECT COUNT(*) FROM ({query}) AS count_query"
+            else:
+                # Fallback: wrap the entire query
+                count_query = f"SELECT COUNT(*) FROM ({query}) AS count_query"
+            
+            with self.get_cursor(connection_name) as cursor:
+                cursor.execute(count_query)
+                result = cursor.fetchone()
+                return result[0] if result else 0
+        except Exception as e:
+            # If count query fails, return -1 to indicate unknown count
+            import structlog
+            logger = structlog.get_logger()
+            logger.warning("Could not get count for init query, proceeding without count", 
+                         query=query, error=str(e))
+            return -1
+    
     def get_table_columns(self, table_name: str, connection_name: str = "default") -> list:
         """Get table column names"""
         try:

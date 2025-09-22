@@ -42,7 +42,11 @@ class InitQueryThread:
             'errors_count': 0,
             'last_activity_time': None,
             'is_running': False,
-            'is_completed': False
+            'is_completed': False,
+            'pages_processed': 0,
+            'total_rows_estimated': -1,
+            'current_offset': 0,
+            'queue_overflow_stops': 0
         }
         self._stats_lock = threading.Lock()
         
@@ -159,79 +163,128 @@ class InitQueryThread:
                 # Connect to source database
                 self.database_service.connect(source_config, source_connection_name)
                 
-                # Execute init query
-                results, columns = self.database_service.execute_init_query(
+                # Get total count for progress tracking
+                total_count = self.database_service.get_init_query_total_count(
                     table_mapping.init_query, source_connection_name
                 )
                 
-                self.logger.info("Init query executed successfully", 
-                               mapping_key=self.mapping_key, 
-                               rows_count=len(results))
+                with self._stats_lock:
+                    self._stats['total_rows_estimated'] = total_count
                 
-                # Process each row from init query
-                for row_data in results:
-                    if self._is_shutdown_requested():
-                        self.logger.info("Shutdown requested, stopping init query processing", 
-                                       mapping_key=self.mapping_key)
+                self.logger.info("Starting paginated init query processing", 
+                               mapping_key=self.mapping_key, 
+                               total_rows_estimated=total_count)
+                
+                # Process init query with pagination
+                page_size = 1000  # Process 1000 rows at a time
+                
+                # Check if we're resuming from a previous run
+                with self._stats_lock:
+                    offset = self._stats['current_offset']
+                
+                if offset > 0:
+                    self.logger.info("Resuming init query from previous position", 
+                                   mapping_key=self.mapping_key,
+                                   resume_offset=offset,
+                                   total_estimated=total_count)
+                
+                has_more = True
+                
+                while has_more and not self._is_shutdown_requested():
+                    # Execute paginated query
+                    results, columns, has_more = self.database_service.execute_init_query_paginated(
+                        table_mapping.init_query, source_connection_name, page_size, offset
+                    )
+                    
+                    if not results:
                         break
                     
-                    # Convert row to dictionary using column names
-                    row_dict = dict(zip(columns, row_data))
+                    self.logger.info("Processing init query page", 
+                                   mapping_key=self.mapping_key,
+                                   page_size=len(results),
+                                   offset=offset,
+                                   has_more=has_more)
                     
-                    # Create init query event
-                    init_query_event = InitQueryEvent(
-                        mapping_key=self.mapping_key,
-                        source_name=self.source_name,
-                        target_name=target_name,
-                        target_table=target_table_name,
-                        row_data=row_dict,
-                        columns=columns,
-                        init_query=table_mapping.init_query,
-                        primary_key=table_mapping.primary_key,
-                        column_mapping=table_mapping.column_mapping,
-                        filter_config=table_mapping.filter
-                    )
-                    
-                    # Publish event to message bus
-                    self.logger.info("Publishing init query event to message bus", 
-                                    mapping_key=self.mapping_key,
-                                    source_name=self.source_name,
-                                    target_name=target_name,
-                                    target_table=target_table_name,
-                                    row_keys=list(row_dict.keys()))
-                    
-                    success = self.message_bus.publish_init_query_event(
-                        source=self.source_name,
-                        event_data=init_query_event,
-                        target=target_name
-                    )
-                    
-                    if success:
-                        with self._stats_lock:
-                            self._stats['rows_processed'] += 1
-                            self._stats['last_activity_time'] = time.time()
+                    # Process each row from current page
+                    page_processed = 0
+                    for row_data in results:
+                        if self._is_shutdown_requested():
+                            self.logger.info("Shutdown requested, stopping init query processing", 
+                                           mapping_key=self.mapping_key)
+                            break
                         
-                        self.logger.info("Init query row published to message bus successfully", 
-                                        mapping_key=self.mapping_key, 
-                                        source_name=self.source_name,
-                                        target_name=target_name,
-                                        row_keys=list(row_dict.keys()))
-                    else:
-                        with self._stats_lock:
-                            self._stats['errors_count'] += 1
+                        # Convert row to dictionary using column names
+                        row_dict = dict(zip(columns, row_data))
                         
-                        self.logger.warning("Failed to publish init query row to message bus", 
-                                          mapping_key=self.mapping_key,
-                                          source_name=self.source_name,
-                                          target_name=target_name,
-                                          row_keys=list(row_dict.keys()))
+                        # Create init query event
+                        init_query_event = InitQueryEvent(
+                            mapping_key=self.mapping_key,
+                            source_name=self.source_name,
+                            target_name=target_name,
+                            target_table=target_table_name,
+                            row_data=row_dict,
+                            columns=columns,
+                            init_query=table_mapping.init_query,
+                            primary_key=table_mapping.primary_key,
+                            column_mapping=table_mapping.column_mapping,
+                            filter_config=table_mapping.filter
+                        )
+                        
+                        # Publish event to message bus with retry logic
+                        success = self._publish_with_retry(init_query_event, target_name)
+                        
+                        if success:
+                            page_processed += 1
+                            with self._stats_lock:
+                                self._stats['rows_processed'] += 1
+                                self._stats['last_activity_time'] = time.time()
+                        else:
+                            # Queue overflow - stop processing to prevent data loss
+                            with self._stats_lock:
+                                self._stats['errors_count'] += 1
+                                self._stats['queue_overflow_stops'] += 1
+                            
+                            self.logger.error("Queue overflow detected, stopping init query processing to prevent data loss", 
+                                            mapping_key=self.mapping_key,
+                                            source_name=self.source_name,
+                                            target_name=target_name,
+                                            processed_rows=self._stats['rows_processed'],
+                                            current_offset=offset + page_processed,
+                                            total_estimated=total_count)
+                            
+                            # Mark as not completed so it can be resumed later
+                            with self._stats_lock:
+                                self._stats['current_offset'] = offset + page_processed
+                                self._stats['is_completed'] = False
+                            
+                            return  # Stop processing immediately
+                    
+                    # Update statistics for completed page
+                    with self._stats_lock:
+                        self._stats['pages_processed'] += 1
+                        self._stats['current_offset'] = offset + len(results)
+                    
+                    offset += page_size
+                    
+                    # Log progress
+                    if total_count > 0:
+                        progress_percent = (self._stats['current_offset'] / total_count) * 100
+                        self.logger.info("Init query progress", 
+                                       mapping_key=self.mapping_key,
+                                       processed_rows=self._stats['rows_processed'],
+                                       total_estimated=total_count,
+                                       progress_percent=f"{progress_percent:.1f}%",
+                                       pages_processed=self._stats['pages_processed'])
                 
-                self.logger.info("Init query processing completed", 
-                               mapping_key=self.mapping_key, 
-                               processed_rows=len(results))
-                
-                with self._stats_lock:
-                    self._stats['is_completed'] = True
+                # Mark as completed if we processed all pages
+                if not self._is_shutdown_requested():
+                    with self._stats_lock:
+                        self._stats['is_completed'] = True
+                    
+                    self.logger.info("Init query processing completed", 
+                                   mapping_key=self.mapping_key, 
+                                   total_processed=self._stats['rows_processed'],
+                                   pages_processed=self._stats['pages_processed'])
                 
             except Exception as e:
                 with self._stats_lock:
@@ -266,6 +319,64 @@ class InitQueryThread:
         """Check if shutdown is requested"""
         with self._shutdown_lock:
             return self._shutdown_requested
+    
+    def _publish_with_retry(self, init_query_event: InitQueryEvent, target_name: str, 
+                           max_retries: int = 2, base_delay: float = 0.1) -> bool:
+        """Publish init query event with limited retry logic for queue overflow detection"""
+        for attempt in range(max_retries + 1):
+            if self._is_shutdown_requested():
+                self.logger.info("Shutdown requested during retry, stopping", 
+                               mapping_key=self.mapping_key)
+                return False
+            
+            success = self.message_bus.publish_init_query_event(
+                source=self.source_name,
+                event_data=init_query_event,
+                target=target_name
+            )
+            
+            if success:
+                if attempt > 0:
+                    self.logger.info("Init query event published successfully after retry", 
+                                   mapping_key=self.mapping_key,
+                                   attempt=attempt + 1,
+                                   max_retries=max_retries + 1)
+                return True
+            
+            # Check queue usage to determine if we should stop immediately
+            queue_size = self.message_bus.get_queue_size()
+            queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
+            
+            # If queue is more than 90% full, stop immediately to prevent data loss
+            if queue_usage_percent > 90:
+                self.logger.error("Message bus queue critically full ({:.1f}%), stopping init query to prevent data loss", 
+                                mapping_key=self.mapping_key,
+                                queue_usage_percent=queue_usage_percent,
+                                queue_size=queue_size,
+                                max_queue_size=self.message_bus.max_queue_size)
+                return False
+            
+            # If not the last attempt and queue is not critically full, wait before retrying
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                self.logger.warning("Message bus queue full ({:.1f}%), retrying in {:.2f}s", 
+                                  mapping_key=self.mapping_key,
+                                  attempt=attempt + 1,
+                                  max_retries=max_retries + 1,
+                                  delay=delay,
+                                  queue_size=queue_size,
+                                  max_queue_size=self.message_bus.max_queue_size,
+                                  queue_usage_percent=queue_usage_percent)
+                time.sleep(delay)
+            else:
+                self.logger.error("Message bus queue persistently full ({:.1f}%), giving up", 
+                                mapping_key=self.mapping_key,
+                                max_retries=max_retries + 1,
+                                queue_size=queue_size,
+                                max_queue_size=self.message_bus.max_queue_size,
+                                queue_usage_percent=queue_usage_percent)
+        
+        return False
 
 
 class InitQueryThreadService:
@@ -434,3 +545,45 @@ class InitQueryThreadService:
         """Get count of completed init query threads"""
         with self._threads_lock:
             return len([t for t in self._threads.values() if t.is_completed()])
+    
+    def get_incomplete_threads(self) -> List[str]:
+        """Get list of mapping keys for incomplete init query threads"""
+        with self._threads_lock:
+            incomplete = []
+            for mapping_key, thread in self._threads.items():
+                if not thread.is_completed() and not thread.is_running():
+                    incomplete.append(mapping_key)
+            return incomplete
+    
+    def resume_init_query_thread(self, mapping_key: str, config: ETLConfig) -> bool:
+        """Resume init query thread from last processed position"""
+        with self._threads_lock:
+            if mapping_key not in self._threads:
+                self.logger.warning("Init query thread not found for resuming", mapping_key=mapping_key)
+                return False
+            
+            thread = self._threads[mapping_key]
+            if thread.is_running():
+                self.logger.warning("Init query thread is already running", mapping_key=mapping_key)
+                return False
+            
+            if thread.is_completed():
+                self.logger.info("Init query thread is already completed", mapping_key=mapping_key)
+                return True
+            
+            # Get thread stats to check if it can be resumed
+            stats = thread.get_stats()
+            if stats['current_offset'] <= 0:
+                self.logger.warning("Cannot resume init query thread, no valid offset", 
+                                  mapping_key=mapping_key, current_offset=stats['current_offset'])
+                return False
+            
+            self.logger.info("Resuming init query thread from last position", 
+                           mapping_key=mapping_key,
+                           current_offset=stats['current_offset'],
+                           rows_processed=stats['rows_processed'],
+                           pages_processed=stats['pages_processed'])
+            
+            # Restart the thread
+            thread.start()
+            return True
