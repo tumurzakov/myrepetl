@@ -1,0 +1,72 @@
+{
+  "sources": {
+    "source1": {
+      "host": "localhost",
+      "port": 3306,
+      "user": "root",
+      "password": "password",
+      "database": "source_db"
+    }
+  },
+  "targets": {
+    "target1": {
+      "host": "localhost",
+      "port": 3306,
+      "user": "root",
+      "password": "password",
+      "database": "target_db",
+      "batch_size": 100
+    }
+  },
+  "replication": {
+    "server_id": 100,
+    "log_file": null,
+    "log_pos": 4,
+    "resume_stream": true,
+    "blocking": true
+  },
+  "mapping": {
+    "source1.users": {
+      "target_table": "users",
+      "primary_key": "id",
+      "source": "source1",
+      "target": "target1",
+      "column_mapping": {
+        "id": {
+          "column": "id",
+          "primary_key": true
+        },
+        "name": {
+          "column": "name"
+        },
+        "email": {
+          "column": "email"
+        },
+        "created_at": {
+          "column": "created_at"
+        }
+      }
+    },
+    "source1.orders": {
+      "target_table": "orders",
+      "primary_key": "id",
+      "source": "source1",
+      "target": "target1",
+      "column_mapping": {
+        "id": {
+          "column": "id",
+          "primary_key": true
+        },
+        "user_id": {
+          "column": "user_id"
+        },
+        "amount": {
+          "column": "amount"
+        },
+        "status": {
+          "column": "status"
+        }
+      }
+    }
+  }
+}

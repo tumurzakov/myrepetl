@@ -645,4 +645,277 @@ class TestTargetThreadService:
         
         # Should have tried only 1 time for generic exceptions
         assert mock_operation2.call_count == 1
+    
+    def test_batch_processing_initialization(self):
+        """Test batch processing initialization"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 50
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        assert thread._batch_size == 50
+        assert thread._batch_accumulator == {}
+        assert thread._batch_flush_interval == 1.0
+    
+    def test_get_table_key(self):
+        """Test getting table key for batching"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        event = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test"},
+            source_name="test_source"
+        )
+        
+        table_key = thread._get_table_key(event)
+        assert table_key == "test_source.test_schema.test_table"
+    
+    def test_add_to_batch_insert_event(self):
+        """Test adding INSERT event to batch"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 2  # Small batch size for testing
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        event = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test"},
+            source_name="test_source"
+        )
+        
+        # Add first event
+        result = thread._add_to_batch(event)
+        assert result is True
+        assert len(thread._batch_accumulator) == 1
+        table_key = thread._get_table_key(event)
+        assert len(thread._batch_accumulator[table_key]) == 1
+        
+        # Add second event (should trigger batch processing)
+        event2 = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 2, "name": "test2"},
+            source_name="test_source"
+        )
+        
+        with patch.object(thread, '_process_batch_events') as mock_process_batch:
+            result = thread._add_to_batch(event2)
+            assert result is True
+            # Batch should be processed and cleared
+            assert len(thread._batch_accumulator[table_key]) == 0
+            mock_process_batch.assert_called_once()
+    
+    def test_add_to_batch_delete_event(self):
+        """Test that DELETE events are not batched"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        from src.models.events import DeleteEvent
+        event = DeleteEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test"},
+            source_name="test_source"
+        )
+        
+        result = thread._add_to_batch(event)
+        assert result is False
+        assert len(thread._batch_accumulator) == 0
+    
+    def test_should_flush_batches_time_interval(self):
+        """Test batch flushing based on time interval"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Set last flush time to 2 seconds ago
+        thread._last_batch_flush = time.time() - 2.0
+        
+        result = thread._should_flush_batches()
+        assert result is True
+    
+    def test_should_flush_batches_size_limit(self):
+        """Test batch flushing based on size limit"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 2
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Add events to batch manually (bypassing _add_to_batch to avoid auto-processing)
+        event1 = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test1"},
+            source_name="test_source"
+        )
+        event2 = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 2, "name": "test2"},
+            source_name="test_source"
+        )
+        
+        table_key = thread._get_table_key(event1)
+        with thread._batch_lock:
+            thread._batch_accumulator[table_key] = [event1, event2]
+        
+        result = thread._should_flush_batches()
+        assert result is True
+    
+    def test_flush_all_batches(self):
+        """Test flushing all batches"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Add some events to batch
+        event1 = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 1, "name": "test1"},
+            source_name="test_source"
+        )
+        event2 = InsertEvent(
+            schema="test_schema",
+            table="test_table",
+            values={"id": 2, "name": "test2"},
+            source_name="test_source"
+        )
+        
+        thread._add_to_batch(event1)
+        thread._add_to_batch(event2)
+        
+        with patch.object(thread, '_process_batch_events') as mock_process_batch:
+            thread._flush_all_batches()
+            
+            # Should process batches and clear accumulator
+            assert len(thread._batch_accumulator) == 0
+            mock_process_batch.assert_called_once()
+    
+    def test_batch_statistics(self):
+        """Test batch statistics tracking"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        stats = thread.get_stats()
+        
+        assert 'batch_operations' in stats
+        assert 'batch_records_processed' in stats
+        assert stats['batch_operations'] == 0
+        assert stats['batch_records_processed'] == 0
 

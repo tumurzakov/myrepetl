@@ -45,6 +45,13 @@ class TargetThread:
         # Event processing queue - increased size to handle high throughput
         self._event_queue = Queue(maxsize=10000)
         
+        # Batch processing
+        self._batch_size = target_config.batch_size
+        self._batch_accumulator = {}  # {table_key: [events]}
+        self._batch_lock = threading.Lock()
+        self._last_batch_flush = time.time()
+        self._batch_flush_interval = 1.0  # Flush batches every 1 second
+        
         # Statistics
         self._stats = {
             'events_processed': 0,
@@ -58,7 +65,9 @@ class TargetThread:
             'is_running': False,
             'queue_size': 0,
             'max_queue_size': 0,
-            'queue_usage_percent': 0
+            'queue_usage_percent': 0,
+            'batch_operations': 0,
+            'batch_records_processed': 0
         }
         self._stats_lock = threading.Lock()
         
@@ -108,6 +117,13 @@ class TargetThread:
             self.message_bus.unsubscribe(MessageType.INIT_QUERY_EVENT, self._init_query_subscription)
         self.message_bus.unsubscribe(MessageType.SHUTDOWN, self._handle_shutdown)
         
+        # Flush all remaining batches before stopping
+        try:
+            self._flush_all_batches()
+        except Exception as e:
+            self.logger.warning("Error flushing batches during shutdown", 
+                              target_name=self.target_name, error=str(e))
+        
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5.0)
@@ -151,11 +167,20 @@ class TargetThread:
                     # Get event from queue with shorter timeout for better responsiveness
                     event = self._event_queue.get(timeout=0.1)
                     
-                    # Process event
-                    self._process_event(event)
+                    # Try to add event to batch first
+                    if self._add_to_batch(event):
+                        # Event was added to batch or processed as batch
+                        pass
+                    else:
+                        # Event should be processed immediately (e.g., DELETE events)
+                        self._process_event(event)
                     
                     # Mark task as done
                     self._event_queue.task_done()
+                    
+                    # Check if we should flush batches
+                    if self._should_flush_batches():
+                        self._flush_all_batches()
                     
                     # Log queue statistics every 30 seconds
                     current_time = time.time()
@@ -164,7 +189,9 @@ class TargetThread:
                         last_stats_time = current_time
                     
                 except Empty:
-                    # Timeout reached, continue to check shutdown
+                    # Timeout reached, check if we should flush batches and continue
+                    if self._should_flush_batches():
+                        self._flush_all_batches()
                     continue
                 except Exception as e:
                     import traceback
@@ -945,6 +972,273 @@ class TargetThread:
         with self._shutdown_lock:
             return self._shutdown_requested
     
+    def _get_table_key(self, event: BinlogEvent) -> str:
+        """Get unique key for table to group events for batching"""
+        return f"{event.source_name}.{event.schema}.{event.table}"
+    
+    def _should_flush_batches(self) -> bool:
+        """Check if batches should be flushed based on time or size"""
+        current_time = time.time()
+        time_elapsed = current_time - self._last_batch_flush
+        
+        with self._batch_lock:
+            # Flush if time interval exceeded or any batch is full
+            if time_elapsed >= self._batch_flush_interval:
+                return True
+            
+            for table_key, events in self._batch_accumulator.items():
+                if len(events) >= self._batch_size:
+                    return True
+        
+        return False
+    
+    def _flush_all_batches(self) -> None:
+        """Flush all accumulated batches"""
+        with self._batch_lock:
+            if not self._batch_accumulator:
+                return
+            
+            for table_key, events in self._batch_accumulator.items():
+                if events:
+                    self._process_batch_events(table_key, events)
+            
+            # Clear all batches
+            self._batch_accumulator.clear()
+            self._last_batch_flush = time.time()
+    
+    def _add_to_batch(self, event: BinlogEvent) -> bool:
+        """Add event to batch accumulator. Returns True if event was added to batch, False if should be processed immediately"""
+        # Only batch INSERT and UPDATE events, DELETE events are processed immediately
+        if isinstance(event, DeleteEvent):
+            return False
+        
+        table_key = self._get_table_key(event)
+        
+        with self._batch_lock:
+            if table_key not in self._batch_accumulator:
+                self._batch_accumulator[table_key] = []
+            
+            self._batch_accumulator[table_key].append(event)
+            
+            # If batch is full, flush it
+            if len(self._batch_accumulator[table_key]) >= self._batch_size:
+                events_to_process = self._batch_accumulator[table_key].copy()
+                self._batch_accumulator[table_key].clear()
+                self._last_batch_flush = time.time()
+                
+                # Process the full batch
+                self._process_batch_events(table_key, events_to_process)
+                return True
+        
+        return True
+    
+    def _process_batch_events(self, table_key: str, events: List[BinlogEvent]) -> None:
+        """Process a batch of events for the same table"""
+        if not events:
+            return
+        
+        import uuid
+        operation_id = str(uuid.uuid4())[:8]
+        
+        try:
+            # Get table mapping from first event
+            first_event = events[0]
+            table_mapping = self._get_table_mapping(first_event.schema, first_event.table, first_event.source_name)
+            
+            if not table_mapping:
+                self.logger.debug("No mapping found for batch table", 
+                                table_key=table_key,
+                                target_name=self.target_name)
+                return
+            
+            # Get target information from mapping
+            if table_mapping.target:
+                target_name = table_mapping.target
+                target_table_name = table_mapping.target_table
+            else:
+                # Legacy format
+                target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
+            
+            if target_name != self.target_name:
+                return
+            
+            # Check target connection before processing
+            if not self._ensure_target_connection():
+                self.logger.warning("Target connection not available, skipping batch", 
+                                  target_name=self.target_name,
+                                  table_key=table_key,
+                                  batch_size=len(events))
+                return
+            
+            # Process batch based on event types
+            insert_events = [e for e in events if isinstance(e, InsertEvent)]
+            update_events = [e for e in events if isinstance(e, UpdateEvent)]
+            
+            self.logger.info("Processing batch events", 
+                            operation_id=operation_id,
+                            table_key=table_key,
+                            target_name=self.target_name,
+                            total_events=len(events),
+                            insert_events=len(insert_events),
+                            update_events=len(update_events))
+            
+            # Process INSERT batch
+            if insert_events:
+                self._process_insert_batch(insert_events, table_mapping, target_table_name, operation_id)
+            
+            # Process UPDATE batch
+            if update_events:
+                self._process_update_batch(update_events, table_mapping, target_table_name, operation_id)
+            
+            # Update statistics
+            with self._stats_lock:
+                self._stats['batch_operations'] += 1
+                self._stats['batch_records_processed'] += len(events)
+                if insert_events:
+                    self._stats['inserts_processed'] += len(insert_events)
+                if update_events:
+                    self._stats['updates_processed'] += len(update_events)
+                self._stats['events_processed'] += len(events)
+                self._stats['last_event_time'] = time.time()
+            
+            self.logger.info("Batch events processed successfully", 
+                            operation_id=operation_id,
+                            table_key=table_key,
+                            target_name=self.target_name,
+                            total_events=len(events))
+            
+        except Exception as e:
+            self.logger.error("Error processing batch events", 
+                            operation_id=operation_id,
+                            table_key=table_key,
+                            target_name=self.target_name,
+                            batch_size=len(events),
+                            error=str(e))
+            with self._stats_lock:
+                self._stats['errors_count'] += 1
+    
+    def _process_insert_batch(self, events: List[InsertEvent], table_mapping, target_table_name: str, operation_id: str) -> None:
+        """Process a batch of INSERT events"""
+        try:
+            # Collect all transformed data
+            batch_data = []
+            source_table = f"{events[0].schema}.{events[0].table}"
+            
+            for event in events:
+                # Apply filters if configured
+                if table_mapping.filter:
+                    if not self.filter_service.apply_filter(event.values, table_mapping.filter):
+                        continue
+                
+                # Apply transformations
+                transformed_data = self.transform_service.apply_column_transforms(
+                    event.values, table_mapping.column_mapping, source_table
+                )
+                batch_data.append(transformed_data)
+            
+            if not batch_data:
+                self.logger.debug("No INSERT events passed filters", 
+                                operation_id=operation_id,
+                                target_name=self.target_name,
+                                total_events=len(events))
+                return
+            
+            # Build and execute batch UPSERT
+            sql, values_list = SQLBuilder.build_batch_upsert_sql(
+                target_table_name,
+                batch_data,
+                table_mapping.primary_key
+            )
+            
+            self.logger.info("Executing batch UPSERT for INSERT", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            batch_size=len(batch_data),
+                            target_name=self.target_name)
+            
+            result = self._execute_with_retry(
+                self.database_service.execute_batch, sql, values_list, self.target_name
+            )
+            
+            self.logger.info("INSERT batch processed successfully", 
+                            operation_id=operation_id,
+                            batch_size=len(batch_data),
+                            affected_rows=result,
+                            target_name=self.target_name)
+            
+        except Exception as e:
+            self.logger.error("Error processing INSERT batch", 
+                            operation_id=operation_id,
+                            target_name=self.target_name,
+                            batch_size=len(events),
+                            error=str(e))
+            raise
+    
+    def _process_update_batch(self, events: List[UpdateEvent], table_mapping, target_table_name: str, operation_id: str) -> None:
+        """Process a batch of UPDATE events"""
+        try:
+            # Collect all transformed data
+            batch_data = []
+            source_table = f"{events[0].schema}.{events[0].table}"
+            
+            for event in events:
+                # Apply filters if configured (check both before and after values)
+                if table_mapping.filter:
+                    after_passes_filter = self.filter_service.apply_filter(event.after_values, table_mapping.filter)
+                    before_passed_filter = self.filter_service.apply_filter(event.before_values, table_mapping.filter)
+                    
+                    if not after_passes_filter and not before_passed_filter:
+                        # Both before and after don't pass filter, skip
+                        continue
+                    elif not after_passes_filter and before_passed_filter:
+                        # Record was previously included but now excluded, delete it
+                        self._delete_filtered_record(event.before_values, table_mapping, target_table_name, source_table, operation_id)
+                        continue
+                
+                # Apply transformations to after_values
+                transformed_data = self.transform_service.apply_column_transforms(
+                    event.after_values, table_mapping.column_mapping, source_table
+                )
+                batch_data.append(transformed_data)
+            
+            if not batch_data:
+                self.logger.debug("No UPDATE events passed filters", 
+                                operation_id=operation_id,
+                                target_name=self.target_name,
+                                total_events=len(events))
+                return
+            
+            # Build and execute batch UPSERT
+            sql, values_list = SQLBuilder.build_batch_upsert_sql(
+                target_table_name,
+                batch_data,
+                table_mapping.primary_key
+            )
+            
+            self.logger.info("Executing batch UPSERT for UPDATE", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            batch_size=len(batch_data),
+                            target_name=self.target_name)
+            
+            result = self._execute_with_retry(
+                self.database_service.execute_batch, sql, values_list, self.target_name
+            )
+            
+            self.logger.info("UPDATE batch processed successfully", 
+                            operation_id=operation_id,
+                            batch_size=len(batch_data),
+                            affected_rows=result,
+                            target_name=self.target_name)
+            
+        except Exception as e:
+            self.logger.error("Error processing UPDATE batch", 
+                            operation_id=operation_id,
+                            target_name=self.target_name,
+                            batch_size=len(events),
+                            error=str(e))
+            raise
+    
     def _log_queue_stats(self) -> None:
         """Log queue statistics for monitoring"""
         with self._stats_lock:
@@ -965,7 +1259,10 @@ class TargetThread:
                         inserts_processed=stats['inserts_processed'],
                         updates_processed=stats['updates_processed'],
                         deletes_processed=stats['deletes_processed'],
-                        init_query_events_processed=stats['init_query_events_processed'])
+                        init_query_events_processed=stats['init_query_events_processed'],
+                        batch_operations=stats['batch_operations'],
+                        batch_records_processed=stats['batch_records_processed'],
+                        batch_size=self._batch_size)
     
     def _ensure_target_connection(self) -> bool:
         """Ensure target connection is available and reconnect if needed"""
