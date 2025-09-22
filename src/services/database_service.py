@@ -474,47 +474,88 @@ class DatabaseService:
     def execute_init_query_paginated(self, query: str, connection_name: str = "default", 
                                    page_size: int = 1000, offset: int = 0) -> Tuple[list, list, bool]:
         """Execute init query with pagination and return results with column names and has_more flag"""
-        try:
-            # Ensure connection is valid before executing query
-            if not self.is_connected(connection_name):
-                self.logger.warning("Connection not available, attempting to reconnect", 
-                                  connection_name=connection_name)
-                if not self.reconnect_if_needed(connection_name):
-                    # If reconnection fails, provide detailed error message
-                    if connection_name not in self._connection_configs:
-                        raise ConnectionError(f"No configuration found for connection: {connection_name}. "
-                                            f"This usually means the connection was never established or "
-                                            f"the configuration was lost due to an error.")
-                    else:
-                        raise ConnectionError(f"Could not establish connection: {connection_name}. "
-                                            f"Configuration exists but connection failed.")
-            
-            with self.get_cursor(connection_name) as cursor:
-                # Add LIMIT and OFFSET to the query
-                paginated_query = f"{query} LIMIT {page_size} OFFSET {offset}"
+        import pymysql.err
+        import time
+        
+        max_retries = 3
+        retry_delay = 2.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Ensure connection is valid before executing query
+                if not self.is_connected(connection_name):
+                    self.logger.warning("Connection not available, attempting to reconnect", 
+                                      connection_name=connection_name)
+                    if not self.reconnect_if_needed(connection_name):
+                        # If reconnection fails, provide detailed error message
+                        if connection_name not in self._connection_configs:
+                            raise ConnectionError(f"No configuration found for connection: {connection_name}. "
+                                                f"This usually means the connection was never established or "
+                                                f"the configuration was lost due to an error.")
+                        else:
+                            raise ConnectionError(f"Could not establish connection: {connection_name}. "
+                                                f"Configuration exists but connection failed.")
                 
-                # Execute query and ensure all results are fetched
-                cursor.execute(paginated_query)
-                results = cursor.fetchall()
+                with self.get_cursor(connection_name) as cursor:
+                    # Add LIMIT and OFFSET to the query
+                    paginated_query = f"{query} LIMIT {page_size} OFFSET {offset}"
+                    
+                    # Execute query and ensure all results are fetched
+                    cursor.execute(paginated_query)
+                    results = cursor.fetchall()
+                    
+                    # Get column names
+                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                    
+                    # Ensure cursor is fully consumed before checking for more results
+                    # This prevents "Command Out of Sync" errors
+                    cursor.fetchall()  # This will return empty list but ensures cursor is consumed
+                    
+                    # Check if there are more results
+                    has_more = len(results) == page_size
+                    
+                    return results, columns, has_more
+                    
+            except (pymysql.err.OperationalError, pymysql.err.InternalError, 
+                    pymysql.err.InterfaceError) as e:
+                # MySQL-specific connection errors - these are retryable
+                error_code = getattr(e, 'args', [None])[0] if e.args else None
+                self.logger.warning("MySQL connection error during paginated query, retrying", 
+                                  connection_name=connection_name,
+                                  attempt=attempt + 1,
+                                  max_retries=max_retries,
+                                  error_type=type(e).__name__,
+                                  error_code=error_code,
+                                  error_message=str(e))
                 
-                # Get column names
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                
-                # Ensure cursor is fully consumed before checking for more results
-                # This prevents "Command Out of Sync" errors
-                cursor.fetchall()  # This will return empty list but ensures cursor is consumed
-                
-                # Check if there are more results
-                has_more = len(results) == page_size
-                
-                return results, columns, has_more
-        except Exception as e:
-            # Log the specific error for debugging
-            self.logger.error("Error executing paginated init query", 
-                            connection_name=connection_name, 
-                            error_type=type(e).__name__,
-                            error_message=str(e))
-            raise ConnectionError(f"Error executing paginated init query: {e}")
+                if attempt < max_retries - 1:
+                    # Force connection cleanup and recreation on MySQL errors
+                    try:
+                        self.close_connection(connection_name)
+                    except Exception:
+                        pass  # Ignore cleanup errors
+                    
+                    # Wait before retrying
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                else:
+                    # Last attempt failed
+                    self.logger.error("All retry attempts failed for paginated init query", 
+                                    connection_name=connection_name,
+                                    max_retries=max_retries,
+                                    error_type=type(e).__name__,
+                                    error_message=str(e))
+                    raise ConnectionError(f"Error executing paginated init query after {max_retries} attempts: {e}")
+                    
+            except Exception as e:
+                # Other errors - log but don't retry
+                self.logger.error("Non-retryable error executing paginated init query", 
+                                connection_name=connection_name, 
+                                attempt=attempt + 1,
+                                max_retries=max_retries,
+                                error_type=type(e).__name__,
+                                error_message=str(e))
+                raise ConnectionError(f"Error executing paginated init query: {e}")
     
     def get_init_query_total_count(self, query: str, connection_name: str = "default") -> int:
         """Get total count of records that would be returned by init query"""

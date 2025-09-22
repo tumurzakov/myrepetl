@@ -271,36 +271,47 @@ class InitQueryThread:
         has_more = True
         
         while has_more and not self._is_shutdown_requested():
-            self._ensure_connection(source_connection_name, "executing query")
-            
-            # Execute paginated query
-            results, columns, has_more = self.database_service.execute_init_query_paginated(
-                table_mapping.init_query, source_connection_name, page_size, offset
-            )
-            
-            if not results:
-                break
-            
-            self.logger.info("Processing init query page", 
-                           mapping_key=self.mapping_key,
-                           page_size=len(results),
-                           offset=offset,
-                           has_more=has_more)
-            
-            # Process page results
-            page_processed = self._process_page_results(
-                results, columns, table_mapping, target_name, target_table_name, offset, total_count
-            )
-            
-            if page_processed < len(results):
-                # Queue overflow occurred, processing stopped
+            try:
+                self._ensure_connection(source_connection_name, "executing query")
+                
+                # Execute paginated query
+                results, columns, has_more = self.database_service.execute_init_query_paginated(
+                    table_mapping.init_query, source_connection_name, page_size, offset
+                )
+                
+                if not results:
+                    break
+                    
+            except Exception as e:
+                # Handle connection errors during query execution
+                self.logger.error("Error during paginated query execution, stopping init query", 
+                                mapping_key=self.mapping_key,
+                                offset=offset,
+                                error_type=type(e).__name__,
+                                error_message=str(e))
+                self._handle_execution_error(e, target_name)
                 return
             
-            # Update statistics and metrics for completed page
-            self._update_page_completion_stats(results, offset)
-            
-            offset += page_size
-            self._log_progress(total_count)
+                self.logger.info("Processing init query page", 
+                               mapping_key=self.mapping_key,
+                               page_size=len(results),
+                               offset=offset,
+                               has_more=has_more)
+                
+                # Process page results
+                page_processed = self._process_page_results(
+                    results, columns, table_mapping, target_name, target_table_name, offset, total_count
+                )
+                
+                if page_processed < len(results):
+                    # Queue overflow occurred, processing stopped
+                    return
+                
+                # Update statistics and metrics for completed page
+                self._update_page_completion_stats(results, offset)
+                
+                offset += page_size
+                self._log_progress(total_count)
         
         # Mark as completed if we processed all pages
         if not self._is_shutdown_requested():
@@ -553,7 +564,7 @@ class InitQueryThread:
             # If not the last attempt and queue is not critically full, wait before retrying
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt)  # Exponential backoff
-                self.logger.warning("Message bus queue full ({:.1f}%), retrying in {:.2f}s", 
+                self.logger.warning("Message bus queue full, retrying", 
                                   mapping_key=self.mapping_key,
                                   attempt=attempt + 1,
                                   max_retries=max_retries + 1,
@@ -563,7 +574,7 @@ class InitQueryThread:
                                   queue_usage_percent=queue_usage_percent)
                 time.sleep(delay)
             else:
-                self.logger.error("Message bus queue persistently full ({:.1f}%), giving up", 
+                self.logger.error("Message bus queue persistently full, giving up", 
                                 mapping_key=self.mapping_key,
                                 max_retries=max_retries + 1,
                                 queue_size=queue_size,
