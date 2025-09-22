@@ -359,6 +359,16 @@ class InitQueryThread:
     def _create_and_publish_event(self, row_dict: Dict, columns: List, table_mapping,
                                 target_name: str, target_table_name: str) -> bool:
         """Create init query event and publish it"""
+        
+        # Log row data for debugging IntegrityError issues
+        self.logger.debug("Creating init query event", 
+                        mapping_key=self.mapping_key,
+                        target_table=target_table_name,
+                        row_data_keys=list(row_dict.keys()),
+                        row_data_sample={k: v for k, v in list(row_dict.items())[:5]},
+                        has_month_field='month' in [col.lower() for col in row_dict.keys()],
+                        month_value=row_dict.get('month') if 'month' in row_dict else row_dict.get('MONTH'))
+        
         init_query_event = InitQueryEvent(
             mapping_key=self.mapping_key,
             source_name=self.source_name,

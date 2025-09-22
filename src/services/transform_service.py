@@ -171,7 +171,18 @@ class TransformService:
                                    target_column=target_col,
                                    transform=target_config.transform,
                                    original_value=value,
-                                   transformed_value=transformed_value)
+                                   transformed_value=transformed_value,
+                                   source_table=source_table)
+                        
+                        # Log warning if transformation returned None for a critical field
+                        if transformed_value is None and target_col.lower() in ['month', 'year', 'day', 'date']:
+                            logger.warning("Transformation returned None for date-related field", 
+                                         source_column=source_col,
+                                         target_column=target_col,
+                                         transform=target_config.transform,
+                                         original_value=value,
+                                         source_table=source_table,
+                                         row_data_sample={k: v for k, v in list(row_data.items())[:5]})
                     else:
                         # Fallback to original value
                         transformed_data[target_col] = row_data.get(source_col)

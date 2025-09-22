@@ -699,6 +699,9 @@ class TargetThread:
                                 operation_id=operation_id,
                                 filter=table_mapping.filter)
             
+            # Log mapping configuration for debugging
+            self._log_mapping_configuration(table_mapping, operation_id)
+            
             # Apply transformations
             source_table = f"{event.schema}.{event.table}"
             self.logger.debug("Starting data transformation for INSERT", 
@@ -719,7 +722,8 @@ class TargetThread:
             self.logger.debug("Building UPSERT SQL for INSERT", 
                             operation_id=operation_id,
                             target_table=target_table_name,
-                            primary_key=table_mapping.primary_key)
+                            primary_key=table_mapping.primary_key,
+                            transformed_data_keys=list(transformed_data.keys()))
             
             sql, values = SQLBuilder.build_upsert_sql(
                 target_table_name,
@@ -729,13 +733,25 @@ class TargetThread:
             
             self.logger.info("Executing UPSERT for INSERT", 
                             operation_id=operation_id,
+                            target_table=target_table_name,
                             sql=sql,
                             values_count=len(values),
+                            values_preview=values[:5] if len(values) > 0 else [],
+                            transformed_data=transformed_data,
                             target_name=self.target_name)
             
             result = self._execute_with_retry(
                 self.database_service.execute_update, sql, values, self.target_name
             )
+            
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("INSERT operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  table=event.table,
+                                  schema=event.schema)
+                return
             
             self.logger.info("INSERT processed successfully", 
                             operation_id=operation_id,
@@ -857,6 +873,15 @@ class TargetThread:
                 self.database_service.execute_update, sql, values, self.target_name
             )
             
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("UPDATE operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  table=event.table,
+                                  schema=event.schema)
+                return
+            
             self.logger.info("UPDATE processed successfully", 
                             operation_id=operation_id,
                             before=event.before_values,
@@ -953,6 +978,15 @@ class TargetThread:
                 self.database_service.execute_update, sql, values, self.target_name
             )
             
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("DELETE operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  table=event.table,
+                                  schema=event.schema)
+                return
+            
             self.logger.info("DELETE processed successfully", 
                             operation_id=operation_id,
                             data=event.values, 
@@ -1019,6 +1053,14 @@ class TargetThread:
             result = self._execute_with_retry(
                 self.database_service.execute_update, sql, delete_values, self.target_name
             )
+            
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("Filtered record DELETE operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  data=values)
+                return
             
             self.logger.info("Filtered record deleted successfully", 
                             operation_id=operation_id,
@@ -1371,6 +1413,16 @@ class TargetThread:
             first_event = events[0]
             target_table_name = first_event.target_table
             
+            # Log init batch event details for debugging
+            self.logger.info("Init batch event details", 
+                           operation_id=operation_id,
+                           target_name=self.target_name,
+                           target_table=target_table_name,
+                           batch_size=len(events),
+                           first_event_keys=list(first_event.row_data.keys()) if first_event.row_data else [],
+                           has_month_field='month' in [k.lower() for k in first_event.row_data.keys()] if first_event.row_data else False,
+                           month_value=first_event.row_data.get('month') if first_event.row_data and 'month' in first_event.row_data else None)
+            
             # Check target connection before processing
             if not self._ensure_target_connection():
                 self.logger.warning("Target connection not available, skipping init batch", 
@@ -1426,6 +1478,7 @@ class TargetThread:
                             batch_size=len(batch_data),
                             primary_keys=primary_keys[:10],  # Log first 10 primary keys
                             total_primary_keys=len(primary_keys),
+                            batch_data_sample=batch_data[:2] if len(batch_data) > 0 else [],  # Log first 2 rows
                             target_name=self.target_name)
             
             # Log SQL statement in debug mode for troubleshooting
@@ -1438,6 +1491,14 @@ class TargetThread:
             result = self._execute_with_retry(
                 self.database_service.execute_batch, sql, values_list, self.target_name
             )
+            
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("Init batch operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  batch_size=len(batch_data))
+                return
             
             # Update statistics
             with self._stats_lock:
@@ -1541,6 +1602,14 @@ class TargetThread:
                 self.database_service.execute_batch, sql, values_list, self.target_name
             )
             
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("INSERT batch operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  batch_size=len(batch_data))
+                return
+            
             self.logger.info("INSERT batch processed successfully", 
                             operation_id=operation_id,
                             target_table=target_table_name,
@@ -1620,6 +1689,14 @@ class TargetThread:
             result = self._execute_with_retry(
                 self.database_service.execute_batch, sql, values_list, self.target_name
             )
+            
+            # Check if operation was skipped due to integrity error
+            if result is None:
+                self.logger.warning("UPDATE batch operation skipped due to data integrity constraint", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  batch_size=len(batch_data))
+                return
             
             self.logger.info("UPDATE batch processed successfully", 
                             operation_id=operation_id,
@@ -1743,6 +1820,48 @@ class TargetThread:
                     raise e
                     
             except Exception as e:
+                # Check if it's an IntegrityError (data constraint violation)
+                if "IntegrityError" in type(e).__name__ or "cannot be null" in str(e):
+                    # For IntegrityError, log detailed information for debugging
+                    self.logger.error("Data integrity constraint violation - DETAILED DIAGNOSTICS", 
+                                    target_name=self.target_name,
+                                    error_type=type(e).__name__,
+                                    error_message=str(e),
+                                    operation_func=str(operation_func),
+                                    args_count=len(args),
+                                    kwargs_keys=list(kwargs.keys()) if kwargs else [],
+                                    error_code=getattr(e, 'args', [None])[0] if hasattr(e, 'args') and e.args else None)
+                    
+                    # Log SQL statement and values if available
+                    if len(args) >= 2:
+                        sql_statement = args[0] if isinstance(args[0], str) else str(args[0])
+                        sql_values = args[1] if len(args) > 1 else None
+                        
+                        self.logger.error("SQL Statement that caused IntegrityError", 
+                                        target_name=self.target_name,
+                                        sql_statement=sql_statement,
+                                        sql_values_count=len(sql_values) if sql_values else 0,
+                                        sql_values_preview=sql_values[:5] if sql_values and len(sql_values) > 0 else None,
+                                        sql_values_full=sql_values if sql_values and len(sql_values) <= 10 else "Too many values to log")
+                        
+                        # Try to extract table name from SQL
+                        table_name = self._extract_table_name_from_sql(sql_statement)
+                        if table_name:
+                            self.logger.error("Table where IntegrityError occurred", 
+                                            target_name=self.target_name,
+                                            table_name=table_name,
+                                            sql_operation=self._extract_operation_from_sql(sql_statement))
+                    
+                    # Log current thread context if available
+                    current_thread = threading.current_thread()
+                    self.logger.error("Thread context during IntegrityError", 
+                                    target_name=self.target_name,
+                                    thread_name=current_thread.name,
+                                    thread_id=current_thread.ident)
+                    
+                    # Return None to indicate the operation was skipped
+                    return None
+                
                 # Other errors - log but don't retry
                 self.logger.error("Non-retryable database operation error", 
                                 target_name=self.target_name,
@@ -1751,6 +1870,98 @@ class TargetThread:
                                 error_type=type(e).__name__,
                                 error=str(e))
                 raise e
+    
+    def _extract_table_name_from_sql(self, sql_statement: str) -> str:
+        """Extract table name from SQL statement for logging purposes"""
+        try:
+            import re
+            sql_upper = sql_statement.upper().strip()
+            
+            # Pattern for INSERT INTO table_name
+            if sql_upper.startswith('INSERT'):
+                match = re.search(r'INSERT\s+INTO\s+([^\s\(]+)', sql_upper)
+                if match:
+                    return match.group(1).strip('`"[]')
+            
+            # Pattern for UPDATE table_name
+            elif sql_upper.startswith('UPDATE'):
+                match = re.search(r'UPDATE\s+([^\s]+)', sql_upper)
+                if match:
+                    return match.group(1).strip('`"[]')
+            
+            # Pattern for DELETE FROM table_name
+            elif sql_upper.startswith('DELETE'):
+                match = re.search(r'DELETE\s+FROM\s+([^\s]+)', sql_upper)
+                if match:
+                    return match.group(1).strip('`"[]')
+            
+            return "unknown_table"
+        except Exception:
+            return "unknown_table"
+    
+    def _extract_operation_from_sql(self, sql_statement: str) -> str:
+        """Extract SQL operation type from statement"""
+        try:
+            sql_upper = sql_statement.upper().strip()
+            if sql_upper.startswith('INSERT'):
+                return 'INSERT'
+            elif sql_upper.startswith('UPDATE'):
+                return 'UPDATE'
+            elif sql_upper.startswith('DELETE'):
+                return 'DELETE'
+            elif sql_upper.startswith('SELECT'):
+                return 'SELECT'
+            else:
+                return 'UNKNOWN'
+        except Exception:
+            return 'UNKNOWN'
+    
+    def _log_mapping_configuration(self, table_mapping, operation_id: str = None) -> None:
+        """Log table mapping configuration for debugging"""
+        if not operation_id:
+            operation_id = "unknown"
+            
+        try:
+            # Log column mapping configuration
+            column_mappings = {}
+            for source_col, target_config in table_mapping.column_mapping.items():
+                column_mappings[source_col] = {
+                    'target_column': target_config.column,
+                    'transform': target_config.transform,
+                    'static_value': target_config.value,
+                    'is_primary_key': target_config.primary_key
+                }
+            
+            self.logger.info("Table mapping configuration", 
+                           operation_id=operation_id,
+                           target_name=self.target_name,
+                           target_table=table_mapping.target_table,
+                           primary_key=table_mapping.primary_key,
+                           column_mappings=column_mappings,
+                           has_filter=table_mapping.filter is not None,
+                           filter_config=table_mapping.filter)
+                           
+            # Check for month-related mappings
+            month_mappings = {}
+            for source_col, target_config in table_mapping.column_mapping.items():
+                if 'month' in target_config.column.lower():
+                    month_mappings[source_col] = {
+                        'target_column': target_config.column,
+                        'transform': target_config.transform,
+                        'static_value': target_config.value
+                    }
+            
+            if month_mappings:
+                self.logger.warning("Found month-related column mappings", 
+                                  operation_id=operation_id,
+                                  target_name=self.target_name,
+                                  month_mappings=month_mappings)
+                                  
+        except Exception as e:
+            self.logger.error("Error logging mapping configuration", 
+                            operation_id=operation_id,
+                            target_name=self.target_name,
+                            error=str(e))
 
 
 class TargetThreadService:
