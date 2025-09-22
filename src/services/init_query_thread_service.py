@@ -281,17 +281,7 @@ class InitQueryThread:
                 
                 if not results:
                     break
-                    
-            except Exception as e:
-                # Handle connection errors during query execution
-                self.logger.error("Error during paginated query execution, stopping init query", 
-                                mapping_key=self.mapping_key,
-                                offset=offset,
-                                error_type=type(e).__name__,
-                                error_message=str(e))
-                self._handle_execution_error(e, target_name)
-                return
-            
+                
                 self.logger.info("Processing init query page", 
                                mapping_key=self.mapping_key,
                                page_size=len(results),
@@ -312,6 +302,16 @@ class InitQueryThread:
                 
                 offset += page_size
                 self._log_progress(total_count)
+                    
+            except Exception as e:
+                # Handle connection errors during query execution
+                self.logger.error("Error during paginated query execution, stopping init query", 
+                                mapping_key=self.mapping_key,
+                                offset=offset,
+                                error_type=type(e).__name__,
+                                error_message=str(e))
+                self._handle_execution_error(e, target_name)
+                return
         
         # Mark as completed if we processed all pages
         if not self._is_shutdown_requested():

@@ -36,15 +36,20 @@ class DatabaseService:
         try:
             connection_params = config.to_connection_params()
             # Add connection timeout and other robustness parameters
+            # For init queries, we need longer timeouts as they can process large datasets
+            is_init_connection = connection_name.startswith("init_source_")
+            read_timeout = 300 if is_init_connection else 30  # 5 minutes for init queries, 30s for others
+            write_timeout = 300 if is_init_connection else 30
+            
             connection_params.update({
                 'connect_timeout': 10,
-                'read_timeout': 30,
-                'write_timeout': 30,
+                'read_timeout': read_timeout,
+                'write_timeout': write_timeout,
                 'autocommit': True,
                 'charset': 'utf8mb4',
                 'use_unicode': True,
                 'sql_mode': 'TRADITIONAL',
-                'init_command': "SET SESSION wait_timeout=28800, interactive_timeout=28800"
+                'init_command': "SET SESSION wait_timeout=28800, interactive_timeout=28800, net_read_timeout=300, net_write_timeout=300"
             })
             connection = pymysql.connect(**connection_params)
             # Atomically store both connection and config
@@ -529,13 +534,29 @@ class DatabaseService:
                     pymysql.err.InterfaceError) as e:
                 # MySQL-specific connection errors - these are retryable
                 error_code = getattr(e, 'args', [None])[0] if e.args else None
-                self.logger.warning("MySQL connection error during paginated query, retrying", 
-                                  connection_name=connection_name,
-                                  attempt=attempt + 1,
-                                  max_retries=max_retries,
-                                  error_type=type(e).__name__,
-                                  error_code=error_code,
-                                  error_message=str(e))
+                error_message = str(e)
+                
+                # Check if this is a timeout error
+                is_timeout_error = (error_code == 2013 or 
+                                  'timeout' in error_message.lower() or 
+                                  'lost connection' in error_message.lower())
+                
+                if is_timeout_error:
+                    self.logger.warning("MySQL timeout error during paginated query, retrying with longer timeout", 
+                                      connection_name=connection_name,
+                                      attempt=attempt + 1,
+                                      max_retries=max_retries,
+                                      error_type=type(e).__name__,
+                                      error_code=error_code,
+                                      error_message=error_message)
+                else:
+                    self.logger.warning("MySQL connection error during paginated query, retrying", 
+                                      connection_name=connection_name,
+                                      attempt=attempt + 1,
+                                      max_retries=max_retries,
+                                      error_type=type(e).__name__,
+                                      error_code=error_code,
+                                      error_message=error_message)
                 
                 if attempt < max_retries - 1:
                     # Force connection cleanup and recreation on MySQL errors
@@ -544,8 +565,14 @@ class DatabaseService:
                     except Exception:
                         pass  # Ignore cleanup errors
                     
+                    # For timeout errors, wait longer before retrying
+                    if is_timeout_error:
+                        retry_delay_multiplier = 3.0  # Wait 3x longer for timeout errors
+                    else:
+                        retry_delay_multiplier = 1.0
+                    
                     # Wait before retrying
-                    time.sleep(retry_delay * (attempt + 1))
+                    time.sleep(retry_delay * retry_delay_multiplier * (attempt + 1))
                     continue
                 else:
                     # Last attempt failed
