@@ -282,7 +282,7 @@ class TargetThread:
     def _handle_init_query_event(self, message: Message) -> None:
         """Handle init query event message from message bus"""
         try:
-            self.logger.debug("Received init query event message", 
+            self.logger.info("Received init query event message", 
                             target_name=self.target_name,
                             message_target=message.target,
                             message_source=message.source,
@@ -312,7 +312,7 @@ class TargetThread:
                                   message_source=message.source)
                 return
             
-            self.logger.debug("Processing init query event directly", 
+            self.logger.info("Processing init query event directly", 
                             target_name=self.target_name,
                             event_id=getattr(event_data, 'event_id', None),
                             mapping_key=getattr(event_data, 'mapping_key', None),
@@ -321,7 +321,7 @@ class TargetThread:
             # Process init query event directly (no queue needed for init queries)
             self._process_init_query_event(event_data)
             
-            self.logger.debug("Init query event processed successfully", 
+            self.logger.info("Init query event processed successfully", 
                             target_name=self.target_name,
                             event_id=getattr(event_data, 'event_id', None))
             

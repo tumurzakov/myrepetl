@@ -144,7 +144,7 @@ class MessageBus:
     
     def publish_init_query_event(self, source: str, event_data: Any, target: str = None) -> bool:
         """Publish init query event message"""
-        self.logger.debug("Creating init query event message", 
+        self.logger.info("Creating init query event message", 
                         source=source,
                         target=target,
                         event_data_type=type(event_data).__name__ if event_data else None,
@@ -159,7 +159,7 @@ class MessageBus:
         )
         
         result = self.publish(message)
-        self.logger.debug("Init query event message publish result", 
+        self.logger.info("Init query event message publish result", 
                         source=source,
                         target=target,
                         success=result,
@@ -231,12 +231,22 @@ class MessageBus:
     
     def _process_message(self, message: Message) -> None:
         """Process a single message"""
-        self.logger.debug("Processing message", 
-                        message_type=message.message_type.value,
-                        source=message.source,
-                        target=message.target,
-                        message_id=message.message_id,
-                        data_type=type(message.data).__name__ if message.data else None)
+        # Log init query events at info level for easier tracking
+        if message.message_type == MessageType.INIT_QUERY_EVENT:
+            self.logger.info("Processing init query message", 
+                            message_type=message.message_type.value,
+                            source=message.source,
+                            target=message.target,
+                            message_id=message.message_id,
+                            data_type=type(message.data).__name__ if message.data else None,
+                            mapping_key=getattr(message.data, 'mapping_key', None) if message.data else None)
+        else:
+            self.logger.debug("Processing message", 
+                            message_type=message.message_type.value,
+                            source=message.source,
+                            target=message.target,
+                            message_id=message.message_id,
+                            data_type=type(message.data).__name__ if message.data else None)
         
         with self._subscriber_lock:
             subscribers = self._subscribers.get(message.message_type, [])

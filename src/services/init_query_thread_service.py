@@ -193,7 +193,7 @@ class InitQueryThread:
                     )
                     
                     # Publish event to message bus
-                    self.logger.debug("Publishing init query event to message bus", 
+                    self.logger.info("Publishing init query event to message bus", 
                                     mapping_key=self.mapping_key,
                                     source_name=self.source_name,
                                     target_name=target_name,
@@ -211,7 +211,7 @@ class InitQueryThread:
                             self._stats['rows_processed'] += 1
                             self._stats['last_activity_time'] = time.time()
                         
-                        self.logger.debug("Init query row published to message bus successfully", 
+                        self.logger.info("Init query row published to message bus successfully", 
                                         mapping_key=self.mapping_key, 
                                         source_name=self.source_name,
                                         target_name=target_name,
