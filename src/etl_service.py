@@ -89,6 +89,11 @@ class ETLService:
                 metrics_service=self.metrics_service
             )
             
+            # Set connection types in database service
+            source_names = set(self.config.sources.keys())
+            target_names = set(self.config.targets.keys())
+            self.database_service.set_connection_types(source_names, target_names)
+            
             # Set thread manager and database service references in metrics service for health checks
             self.metrics_service.set_thread_manager(self.thread_manager)
             self.metrics_service.set_database_service(self.database_service)

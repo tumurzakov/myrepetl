@@ -702,10 +702,29 @@ class MetricsService:
                 source_total = 0
                 target_total = 0
                 
-                for connection_name, status in all_connections.items():
-                    # Determine connection type based on name or config
-                    # This is a heuristic - in real implementation you might want to pass connection type
-                    if "source" in connection_name.lower() or connection_name in ["source1", "source2"]:
+                # Get all configured connection names from DatabaseService
+                source_names = self.database_service._source_names
+                target_names = self.database_service._target_names
+                
+                # Process all configured connections (both connected and not connected)
+                all_configured_connections = source_names | target_names
+                
+                for connection_name in all_configured_connections:
+                    # Get connection type from DatabaseService
+                    connection_type = self.database_service.get_connection_type(connection_name)
+                    
+                    # Get status if connection exists, otherwise create default status
+                    if connection_name in all_connections:
+                        status = all_connections[connection_name]
+                    else:
+                        status = {
+                            'exists': False,
+                            'is_connected': False,
+                            'has_config': True,  # We know it has config since it's in our sets
+                            'error': None
+                        }
+                    
+                    if connection_type == "source":
                         source_total += 1
                         if status.get('is_connected', False):
                             source_connections += 1
@@ -724,7 +743,7 @@ class MetricsService:
                                 "has_config": status.get('has_config', False),
                                 "error": status.get('error')
                             })
-                    else:
+                    elif connection_type == "target":
                         target_total += 1
                         if status.get('is_connected', False):
                             target_connections += 1

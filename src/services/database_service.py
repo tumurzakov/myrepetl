@@ -6,7 +6,7 @@ import pymysql
 import pymysql.err
 import threading
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Set, Tuple
 from contextlib import contextmanager
 
 from ..exceptions import ConnectionError
@@ -21,6 +21,8 @@ class DatabaseService:
         self._connections: Dict[str, pymysql.Connection] = {}
         self._connection_configs: Dict[str, DatabaseConfig] = {}
         self.metrics_service = metrics_service
+        self._source_names: Set[str] = set()
+        self._target_names: Set[str] = set()
         # Note: Locks removed for maximum performance - each connection is isolated by unique name
         import structlog
         self.logger = structlog.get_logger()
@@ -249,6 +251,20 @@ class DatabaseService:
             all_status[connection_name] = self.get_connection_status(connection_name)
         
         return all_status
+    
+    def set_connection_types(self, source_names: Set[str], target_names: Set[str]) -> None:
+        """Set connection type information for proper categorization"""
+        self._source_names = source_names
+        self._target_names = target_names
+    
+    def get_connection_type(self, connection_name: str) -> str:
+        """Get connection type (source, target, or unknown)"""
+        if connection_name in self._source_names:
+            return "source"
+        elif connection_name in self._target_names:
+            return "target"
+        else:
+            return "unknown"
     
     def is_connected(self, connection_name: str) -> bool:
         """Check if connection is active"""
