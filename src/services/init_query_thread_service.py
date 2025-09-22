@@ -792,15 +792,64 @@ class InitQueryThreadService:
             return False
     
     def are_all_completed(self) -> bool:
-        """Check if all init query threads are completed"""
+        """Check if all init query threads are completed
+        
+        A thread is considered truly completed only if:
+        1. is_completed() returns True, OR
+        2. completion_reason indicates a non-recoverable state (not queue_overflow)
+        
+        Threads with queue_overflow are NOT considered completed since they can be resumed.
+        """
         with self._threads_lock:
             if not self._threads:
                 return True
             
-            for thread in self._threads.values():
-                if not thread.is_completed():
-                    return False
-            return True
+            incomplete_count = 0
+            for mapping_key, thread in self._threads.items():
+                stats = thread.get_stats()
+                completion_reason = stats.get('completion_reason')
+                is_completed = thread.is_completed()
+                
+                # Thread is completed if:
+                # 1. Explicitly marked as completed, OR
+                # 2. Has a final completion reason (not recoverable)
+                if is_completed:
+                    continue  # This thread is completed
+                
+                # Check for recoverable states that should NOT be considered "completed"
+                if completion_reason in [None, 'queue_overflow']:
+                    # Thread is still running or can be resumed
+                    incomplete_count += 1
+                    self.logger.debug("Thread not completed (recoverable state)",
+                                    mapping_key=mapping_key,
+                                    is_completed=is_completed,
+                                    completion_reason=completion_reason)
+                    continue  # Will return False at the end
+                
+                # For execution errors, check if thread is actually completed
+                if completion_reason == 'execution_error' and not is_completed:
+                    # This is a recoverable execution error (connection issue)
+                    incomplete_count += 1
+                    self.logger.debug("Thread not completed (recoverable execution error)",
+                                    mapping_key=mapping_key,
+                                    is_completed=is_completed,
+                                    completion_reason=completion_reason)
+                    continue  # Will return False at the end
+                
+                # All other completion reasons are considered final
+                # (no_init_query, table_not_empty, completed_successfully, fatal_error)
+                self.logger.debug("Thread considered completed (final state)",
+                                mapping_key=mapping_key,
+                                is_completed=is_completed,
+                                completion_reason=completion_reason)
+            
+            all_completed = incomplete_count == 0
+            self.logger.info("Checking if all init threads are completed",
+                           total_threads=len(self._threads),
+                           incomplete_count=incomplete_count,
+                           all_completed=all_completed)
+            
+            return all_completed
     
     def get_active_threads_count(self) -> int:
         """Get count of active init query threads"""

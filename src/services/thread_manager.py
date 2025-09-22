@@ -699,8 +699,15 @@ class ThreadManager:
                 return
             
             # Check if all init query threads are completed
-            if not self.init_query_thread_service.are_all_completed():
-                # Some init queries are still running, wait
+            all_completed = self.init_query_thread_service.are_all_completed()
+            
+            self.logger.debug("Checking replication start condition",
+                            pause_replication_during_init=config.replication.pause_replication_during_init,
+                            source_threads_running=bool(source_stats),
+                            all_init_completed=all_completed)
+            
+            if not all_completed:
+                # Some init queries are still running or can be resumed, wait
                 return
             
             # All init queries are completed, start source threads
