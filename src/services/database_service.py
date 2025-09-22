@@ -18,14 +18,24 @@ class DatabaseService:
     def __init__(self):
         self._connections: Dict[str, pymysql.Connection] = {}
         self._connection_configs: Dict[str, DatabaseConfig] = {}
-        # Thread-safe lock for atomic connection operations
-        self._connection_lock = threading.RLock()
+        # Thread-safe locks for atomic connection operations - one per connection
+        self._connection_locks: Dict[str, threading.RLock] = {}
+        # Global lock for managing connection locks themselves
+        self._locks_lock = threading.RLock()
         import structlog
         self.logger = structlog.get_logger()
     
+    def _get_connection_lock(self, connection_name: str) -> threading.RLock:
+        """Get or create a lock for a specific connection"""
+        with self._locks_lock:
+            if connection_name not in self._connection_locks:
+                self._connection_locks[connection_name] = threading.RLock()
+            return self._connection_locks[connection_name]
+    
     def connect(self, config: DatabaseConfig, connection_name: str = "default") -> pymysql.Connection:
         """Connect to database"""
-        with self._connection_lock:
+        connection_lock = self._get_connection_lock(connection_name)
+        with connection_lock:
             return self._connect_atomic(config, connection_name)
     
     def _connect_atomic(self, config: DatabaseConfig, connection_name: str = "default") -> pymysql.Connection:
@@ -53,7 +63,8 @@ class DatabaseService:
     
     def get_connection(self, connection_name: str = "default") -> pymysql.Connection:
         """Get existing connection"""
-        with self._connection_lock:
+        connection_lock = self._get_connection_lock(connection_name)
+        with connection_lock:
             if connection_name not in self._connections:
                 raise ConnectionError(f"Connection '{connection_name}' not found")
             
@@ -94,7 +105,8 @@ class DatabaseService:
                                   connection_name=connection_name)
                 # Force connection reset by removing it from pool atomically
                 # Keep configuration but remove connection to allow reconnection
-                with self._connection_lock:
+                connection_lock = self._get_connection_lock(connection_name)
+                with connection_lock:
                     if connection_name in self._connections:
                         try:
                             self._connections[connection_name].close()
@@ -268,7 +280,8 @@ class DatabaseService:
                                       error_message=str(e))
                     # Mark connection as invalid so it gets recreated atomically
                     # Keep configuration but remove connection to allow reconnection
-                    with self._connection_lock:
+                    connection_lock = self._get_connection_lock(connection_name)
+                    with connection_lock:
                         if connection_name in self._connections:
                             try:
                                 self._connections[connection_name].close()
@@ -286,7 +299,8 @@ class DatabaseService:
     
     def reconnect_if_needed(self, connection_name: str) -> bool:
         """Reconnect if connection is lost"""
-        with self._connection_lock:
+        connection_lock = self._get_connection_lock(connection_name)
+        with connection_lock:
             if not self.is_connected(connection_name):
                 if connection_name in self._connection_configs:
                     config = self._connection_configs[connection_name]
@@ -314,7 +328,8 @@ class DatabaseService:
     
     def close_connection(self, connection_name: str = "default") -> None:
         """Close database connection"""
-        with self._connection_lock:
+        connection_lock = self._get_connection_lock(connection_name)
+        with connection_lock:
             self._close_connection_atomic(connection_name)
     
     def _close_connection_atomic(self, connection_name: str = "default") -> None:
