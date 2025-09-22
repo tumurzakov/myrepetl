@@ -144,13 +144,27 @@ class MessageBus:
     
     def publish_init_query_event(self, source: str, event_data: Any, target: str = None) -> bool:
         """Publish init query event message"""
+        self.logger.debug("Creating init query event message", 
+                        source=source,
+                        target=target,
+                        event_data_type=type(event_data).__name__ if event_data else None,
+                        event_id=getattr(event_data, 'event_id', None) if event_data else None,
+                        mapping_key=getattr(event_data, 'mapping_key', None) if event_data else None)
+        
         message = Message(
             message_type=MessageType.INIT_QUERY_EVENT,
             source=source,
             target=target,
             data=event_data
         )
-        return self.publish(message)
+        
+        result = self.publish(message)
+        self.logger.debug("Init query event message publish result", 
+                        source=source,
+                        target=target,
+                        success=result,
+                        message_id=message.message_id)
+        return result
     
     def publish_shutdown(self, source: str) -> bool:
         """Publish shutdown message"""
@@ -217,24 +231,56 @@ class MessageBus:
     
     def _process_message(self, message: Message) -> None:
         """Process a single message"""
+        self.logger.debug("Processing message", 
+                        message_type=message.message_type.value,
+                        source=message.source,
+                        target=message.target,
+                        message_id=message.message_id,
+                        data_type=type(message.data).__name__ if message.data else None)
+        
         with self._subscriber_lock:
             subscribers = self._subscribers.get(message.message_type, [])
         
         if not subscribers:
             self.logger.debug("No subscribers for message type", 
-                             message_type=message.message_type.value)
+                             message_type=message.message_type.value,
+                             source=message.source,
+                             target=message.target)
             return
+        
+        self.logger.debug("Calling subscribers for message", 
+                        message_type=message.message_type.value,
+                        subscribers_count=len(subscribers),
+                        source=message.source,
+                        target=message.target)
         
         # Call all subscribers
         for callback in subscribers:
             try:
+                callback_name = getattr(callback, '__name__', str(callback))
+                self.logger.debug("Calling message subscriber", 
+                                message_type=message.message_type.value,
+                                callback=callback_name,
+                                source=message.source,
+                                target=message.target)
                 callback(message)
+                self.logger.debug("Message subscriber completed successfully", 
+                                message_type=message.message_type.value,
+                                callback=callback_name,
+                                source=message.source,
+                                target=message.target)
             except Exception as e:
                 callback_name = getattr(callback, '__name__', str(callback))
+                import traceback
+                error_traceback = traceback.format_exc()
                 self.logger.error("Error in message subscriber", 
                                  callback=callback_name,
                                  message_type=message.message_type.value,
-                                 error=str(e))
+                                 source=message.source,
+                                 target=message.target,
+                                 error=str(e),
+                                 error_type=type(e).__name__,
+                                 traceback=error_traceback)
     
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""

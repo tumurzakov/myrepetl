@@ -152,8 +152,17 @@ class TargetThread:
                     # Timeout reached, continue to check shutdown
                     continue
                 except Exception as e:
+                    import traceback
+                    error_traceback = traceback.format_exc()
                     self.logger.error("Error processing event", 
-                                    target_name=self.target_name, error=str(e))
+                                    target_name=self.target_name, 
+                                    error=str(e),
+                                    error_type=type(e).__name__,
+                                    event_type=type(event).__name__ if 'event' in locals() else None,
+                                    event_id=getattr(event, 'event_id', None) if 'event' in locals() and event else None,
+                                    schema=getattr(event, 'schema', None) if 'event' in locals() and event else None,
+                                    table=getattr(event, 'table', None) if 'event' in locals() and event else None,
+                                    traceback=error_traceback)
                     with self._stats_lock:
                         self._stats['errors_count'] += 1
             
@@ -170,46 +179,121 @@ class TargetThread:
     def _handle_binlog_event(self, message: Message) -> None:
         """Handle binlog event message from message bus"""
         try:
+            self.logger.debug("Received binlog event message", 
+                            target_name=self.target_name,
+                            message_target=message.target,
+                            message_source=message.source,
+                            message_type=message.message_type,
+                            data_type=type(message.data).__name__ if message.data else None)
+            
             if message.target and message.target != self.target_name:
                 # Event is targeted to a different target
+                self.logger.debug("Event targeted to different target, skipping", 
+                                target_name=self.target_name,
+                                message_target=message.target)
                 return
             
             event = message.data
+            if not event:
+                self.logger.warning("Empty event data in message", 
+                                  target_name=self.target_name,
+                                  message_target=message.target,
+                                  message_source=message.source)
+                return
+                
             if not isinstance(event, BinlogEvent):
                 self.logger.warning("Invalid event type in message", 
                                   target_name=self.target_name,
-                                  event_type=type(event).__name__)
+                                  event_type=type(event).__name__,
+                                  message_target=message.target,
+                                  message_source=message.source)
                 return
+            
+            self.logger.debug("Adding binlog event to processing queue", 
+                            target_name=self.target_name,
+                            event_id=getattr(event, 'event_id', None),
+                            schema=getattr(event, 'schema', None),
+                            table=getattr(event, 'table', None),
+                            event_type=type(event).__name__)
             
             # Add event to processing queue
             self._event_queue.put_nowait(event)
             
+            self.logger.debug("Binlog event added to queue successfully", 
+                            target_name=self.target_name,
+                            queue_size=self._event_queue.qsize())
+            
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
             self.logger.error("Error handling binlog event message", 
-                            target_name=self.target_name, error=str(e))
+                            target_name=self.target_name, 
+                            error=str(e),
+                            error_type=type(e).__name__,
+                            message_target=getattr(message, 'target', None) if message else None,
+                            message_source=getattr(message, 'source', None) if message else None,
+                            message_data_type=type(message.data).__name__ if message and message.data else None,
+                            traceback=error_traceback)
             with self._stats_lock:
                 self._stats['errors_count'] += 1
     
     def _handle_init_query_event(self, message: Message) -> None:
         """Handle init query event message from message bus"""
         try:
+            self.logger.debug("Received init query event message", 
+                            target_name=self.target_name,
+                            message_target=message.target,
+                            message_source=message.source,
+                            message_type=message.message_type,
+                            data_type=type(message.data).__name__ if message.data else None)
+            
             if message.target and message.target != self.target_name:
                 # Event is targeted to a different target
+                self.logger.debug("Init query event targeted to different target, skipping", 
+                                target_name=self.target_name,
+                                message_target=message.target)
                 return
             
             event_data = message.data
+            if not event_data:
+                self.logger.warning("Empty init query event data in message", 
+                                  target_name=self.target_name,
+                                  message_target=message.target,
+                                  message_source=message.source)
+                return
+                
             if not isinstance(event_data, InitQueryEvent):
                 self.logger.warning("Invalid init query event type in message", 
                                   target_name=self.target_name,
-                                  event_type=type(event_data).__name__)
+                                  event_type=type(event_data).__name__,
+                                  message_target=message.target,
+                                  message_source=message.source)
                 return
+            
+            self.logger.debug("Processing init query event directly", 
+                            target_name=self.target_name,
+                            event_id=getattr(event_data, 'event_id', None),
+                            mapping_key=getattr(event_data, 'mapping_key', None),
+                            target_table=getattr(event_data, 'target_table', None))
             
             # Process init query event directly (no queue needed for init queries)
             self._process_init_query_event(event_data)
             
+            self.logger.debug("Init query event processed successfully", 
+                            target_name=self.target_name,
+                            event_id=getattr(event_data, 'event_id', None))
+            
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
             self.logger.error("Error handling init query event message", 
-                            target_name=self.target_name, error=str(e))
+                            target_name=self.target_name, 
+                            error=str(e),
+                            error_type=type(e).__name__,
+                            message_target=getattr(message, 'target', None) if message else None,
+                            message_source=getattr(message, 'source', None) if message else None,
+                            message_data_type=type(message.data).__name__ if message and message.data else None,
+                            traceback=error_traceback)
             with self._stats_lock:
                 self._stats['errors_count'] += 1
     
@@ -224,6 +308,14 @@ class TargetThread:
     def _process_event(self, event: BinlogEvent) -> None:
         """Process a single binlog event"""
         try:
+            self.logger.debug("Starting to process binlog event", 
+                            target_name=self.target_name,
+                            event_type=type(event).__name__,
+                            event_id=getattr(event, 'event_id', None),
+                            schema=getattr(event, 'schema', None),
+                            table=getattr(event, 'table', None),
+                            source_name=getattr(event, 'source_name', None))
+            
             # Check target connection before processing
             if not self._ensure_target_connection():
                 self.logger.warning("Target connection not available, skipping event", 
@@ -295,10 +387,23 @@ class TargetThread:
     
     def _get_table_mapping(self, schema: str, table: str, source_name: str = None) -> Optional[Dict[str, Any]]:
         """Get table mapping configuration"""
+        self.logger.debug("Looking for table mapping", 
+                        target_name=self.target_name,
+                        schema=schema,
+                        table=table,
+                        source_name=source_name)
+        
         # First try to find mapping using new method
         if source_name:
             mapping = self.config.get_mapping_by_source_and_table(source_name, schema, table)
             if mapping:
+                self.logger.debug("Found mapping using new method", 
+                                target_name=self.target_name,
+                                schema=schema,
+                                table=table,
+                                source_name=source_name,
+                                mapping_target=getattr(mapping, 'target', None),
+                                mapping_target_table=getattr(mapping, 'target_table', None))
                 return mapping
         
         # Fallback to old format: try by source_table field
@@ -306,17 +411,43 @@ class TargetThread:
             source_table = f"{source_name}.{table}"
             mapping = self.config.get_mapping_by_source_table(source_table)
             if mapping:
+                self.logger.debug("Found mapping using source_table method", 
+                                target_name=self.target_name,
+                                source_table=source_table,
+                                mapping_target=getattr(mapping, 'target', None),
+                                mapping_target_table=getattr(mapping, 'target_table', None))
                 return mapping
         
         # Fallback to mapping key (for backward compatibility)
         if source_name:
             mapping_key = f"{source_name}.{table}"
             if mapping_key in self.config.mapping:
-                return self.config.mapping.get(mapping_key)
+                mapping = self.config.mapping.get(mapping_key)
+                self.logger.debug("Found mapping using mapping key", 
+                                target_name=self.target_name,
+                                mapping_key=mapping_key,
+                                mapping_target=getattr(mapping, 'target', None),
+                                mapping_target_table=getattr(mapping, 'target_table', None))
+                return mapping
         
         # Fallback to schema.table format
         mapping_key = f"{schema}.{table}"
-        return self.config.mapping.get(mapping_key)
+        mapping = self.config.mapping.get(mapping_key)
+        if mapping:
+            self.logger.debug("Found mapping using schema.table format", 
+                            target_name=self.target_name,
+                            mapping_key=mapping_key,
+                            mapping_target=getattr(mapping, 'target', None),
+                            mapping_target_table=getattr(mapping, 'target_table', None))
+            return mapping
+        
+        self.logger.debug("No mapping found for table", 
+                        target_name=self.target_name,
+                        schema=schema,
+                        table=table,
+                        source_name=source_name,
+                        available_mappings=list(self.config.mapping.keys())[:10])  # Show first 10 mappings
+        return None
     
     def _process_init_query_event(self, event: InitQueryEvent) -> None:
         """Process init query event"""

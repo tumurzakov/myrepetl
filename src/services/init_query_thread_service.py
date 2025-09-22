@@ -193,6 +193,13 @@ class InitQueryThread:
                     )
                     
                     # Publish event to message bus
+                    self.logger.debug("Publishing init query event to message bus", 
+                                    mapping_key=self.mapping_key,
+                                    source_name=self.source_name,
+                                    target_name=target_name,
+                                    target_table=target_table_name,
+                                    row_keys=list(row_dict.keys()))
+                    
                     success = self.message_bus.publish_init_query_event(
                         source=self.source_name,
                         event_data=init_query_event,
@@ -204,16 +211,20 @@ class InitQueryThread:
                             self._stats['rows_processed'] += 1
                             self._stats['last_activity_time'] = time.time()
                         
-                        self.logger.debug("Init query row published to message bus", 
+                        self.logger.debug("Init query row published to message bus successfully", 
                                         mapping_key=self.mapping_key, 
-                                        row=row_dict)
+                                        source_name=self.source_name,
+                                        target_name=target_name,
+                                        row_keys=list(row_dict.keys()))
                     else:
                         with self._stats_lock:
                             self._stats['errors_count'] += 1
                         
                         self.logger.warning("Failed to publish init query row to message bus", 
-                                          mapping_key=self.mapping_key, 
-                                          row=row_dict)
+                                          mapping_key=self.mapping_key,
+                                          source_name=self.source_name,
+                                          target_name=target_name,
+                                          row_keys=list(row_dict.keys()))
                 
                 self.logger.info("Init query processing completed", 
                                mapping_key=self.mapping_key, 
