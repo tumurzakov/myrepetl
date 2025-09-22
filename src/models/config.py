@@ -84,6 +84,7 @@ class TableMapping:
     column_mapping: Dict[str, ColumnMapping]
     filter: Optional[Dict[str, Any]] = None
     init_query: Optional[str] = None
+    init_if_table_empty: bool = True  # Default to True for backward compatibility
     source_table: Optional[str] = None
     source: Optional[str] = None
     target: Optional[str] = None
@@ -156,6 +157,7 @@ class ETLConfig:
                     column_mapping=column_mapping,
                     filter=table_config.get('filter'),
                     init_query=table_config.get('init_query'),
+                    init_if_table_empty=table_config.get('init_if_table_empty', True),
                     source_table=table_config.get('source_table'),
                     source=table_config.get('source'),
                     target=table_config.get('target')

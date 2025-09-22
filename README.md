@@ -30,6 +30,7 @@ myrepetl --help
 - **Новая архитектура сообщений** - добавлен тип сообщения `INIT_QUERY_EVENT` для обработки данных init query через message bus
 - **InitQueryThreadService** - новый сервис для управления потоками init query
 - **Улучшенная производительность** - init query и репликация работают одновременно, что значительно ускоряет инициализацию
+- **Новый флаг `init_if_table_empty`** - позволяет контролировать, когда выполнять init query (по умолчанию `true`)
 - **Обратная совместимость** - старый метод `execute_init_queries()` помечен как deprecated, но продолжает работать
 
 ### Исправления тестов (21.09.2025)
@@ -330,7 +331,8 @@ make test-fast
   - `primary_key`: Флаг первичного ключа
   - `transform`: Путь к функции трансформации
   - `value`: Статическое значение
-- `init_query`: (опционально) SQL запрос для инициализации пустой целевой таблицы
+- `init_query`: (опционально) SQL запрос для инициализации целевой таблицы
+- `init_if_table_empty`: (опционально, по умолчанию `true`) выполнять init_query только если целевая таблица пуста
 - `source_table`: (опционально) Явное указание исходной таблицы в формате `{source_name}.{table_name}`. Если указано, система будет использовать это поле для выбора записей вместо ключа mapping
 - `filter`: (опционально) Условия фильтрации данных
 
@@ -347,18 +349,22 @@ make test-fast
 - Загрузки данных по определенным критериям
 
 **Как работает init_query:**
-1. При запуске ETL проверяется, пуста ли целевая таблица
-2. Если таблица пуста и указан `init_query`, выполняется запрос на источнике
+1. При запуске ETL проверяется флаг `init_if_table_empty`:
+   - Если `true` (по умолчанию): проверяется, пуста ли целевая таблица
+   - Если `false`: init_query выполняется независимо от состояния таблицы
+2. Если условия выполнены и указан `init_query`, выполняется запрос на источнике
 3. Результаты запроса обрабатываются через mapping и фильтры
 4. Данные вставляются/обновляются в целевой таблице
+5. Init query выполняется в отдельном потоке параллельно с репликацией
 
-**Пример использования:**
+**Примеры использования:**
+
+**Пример 1: Init query только для пустых таблиц (по умолчанию)**
 ```json
 {
   "mapping": {
     "source1.users": {
-      "init_query": "SELECT * FROM users WHERE status = 'active' AND id > 2",
-      "source_table": "source1.users",
+      "init_query": "SELECT * FROM users WHERE status = 'active'",
       "target_table": "target1.users",
       "primary_key": "id",
       "column_mapping": {
@@ -370,6 +376,25 @@ make test-fast
       "filter": {
         "status": {"eq": "active"},
         "id": {"gt": 2}
+      }
+    }
+  }
+}
+```
+
+**Пример 2: Init query всегда выполняется (независимо от состояния таблицы)**
+```json
+{
+  "mapping": {
+    "source1.users": {
+      "init_query": "SELECT * FROM users WHERE created_at > '2024-01-01'",
+      "target_table": "target1.users",
+      "primary_key": "id",
+      "init_if_table_empty": false,
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"},
+        "email": {"column": "email"}
       }
     }
   }

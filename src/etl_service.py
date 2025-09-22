@@ -214,19 +214,26 @@ class ETLService:
                                       target_table=table_mapping.target_table)
                     target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
                 
-                # Check if target table is empty (with error handling)
-                try:
-                    if not database_service.is_table_empty(target_table_name, target_name):
-                        self.logger.debug("Target table not empty, skipping init query", 
-                                        mapping_key=mapping_key, 
-                                        target_table=table_mapping.target_table)
-                        continue
-                except Exception as e:
-                    # If we can't check if table is empty, log warning and continue
-                    self.logger.warning("Could not check if target table is empty, proceeding with init query", 
-                                      mapping_key=mapping_key, 
-                                      target_table=table_mapping.target_table, 
-                                      error=str(e))
+                # Check if we should run init query based on configuration
+                if table_mapping.init_if_table_empty:
+                    # Check if target table is empty only if init_if_table_empty is True
+                    try:
+                        if not database_service.is_table_empty(target_table_name, target_name):
+                            self.logger.debug("Target table not empty and init_if_table_empty=True, skipping init query", 
+                                            mapping_key=mapping_key, 
+                                            target_table=table_mapping.target_table)
+                            continue
+                    except Exception as e:
+                        # If we can't check if table is empty, log warning and continue
+                        self.logger.warning("Could not check if target table is empty, proceeding with init query", 
+                                          mapping_key=mapping_key, 
+                                          target_table=table_mapping.target_table, 
+                                          error=str(e))
+                else:
+                    # init_if_table_empty=False, always run init query regardless of table state
+                    self.logger.debug("init_if_table_empty=False, running init query regardless of table state", 
+                                    mapping_key=mapping_key, 
+                                    target_table=table_mapping.target_table)
                 
                 self.logger.info("Executing init query for empty table", 
                                mapping_key=mapping_key, 

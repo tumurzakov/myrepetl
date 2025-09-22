@@ -129,20 +129,27 @@ class InitQueryThread:
                 # Legacy format
                 target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
             
-            # Check if target table is empty
-            try:
-                if not self.database_service.is_table_empty(target_table_name, target_name):
-                    self.logger.info("Target table not empty, skipping init query", 
-                                   mapping_key=self.mapping_key, 
-                                   target_table=target_table_name)
-                    with self._stats_lock:
-                        self._stats['is_completed'] = True
-                    return
-            except Exception as e:
-                self.logger.warning("Could not check if target table is empty, proceeding with init query", 
-                                  mapping_key=self.mapping_key, 
-                                  target_table=target_table_name, 
-                                  error=str(e))
+            # Check if we should run init query based on configuration
+            if table_mapping.init_if_table_empty:
+                # Check if target table is empty only if init_if_table_empty is True
+                try:
+                    if not self.database_service.is_table_empty(target_table_name, target_name):
+                        self.logger.info("Target table not empty and init_if_table_empty=True, skipping init query", 
+                                       mapping_key=self.mapping_key, 
+                                       target_table=target_table_name)
+                        with self._stats_lock:
+                            self._stats['is_completed'] = True
+                        return
+                except Exception as e:
+                    self.logger.warning("Could not check if target table is empty, proceeding with init query", 
+                                      mapping_key=self.mapping_key, 
+                                      target_table=target_table_name, 
+                                      error=str(e))
+            else:
+                # init_if_table_empty=False, always run init query regardless of table state
+                self.logger.info("init_if_table_empty=False, running init query regardless of table state", 
+                               mapping_key=self.mapping_key, 
+                               target_table=target_table_name)
             
             # Get source configuration
             source_config = self.config.get_source_config(self.source_name)
