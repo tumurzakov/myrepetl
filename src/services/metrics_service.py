@@ -545,7 +545,13 @@ class MetricsService:
                         "mapping": mapping_key,
                         "status": status,
                         "rows_processed": stat.get('rows_processed', 0),
-                        "errors_count": stat.get('errors_count', 0)
+                        "total_rows_estimated": stat.get('total_rows_estimated', -1),
+                        "pages_processed": stat.get('pages_processed', 0),
+                        "current_offset": stat.get('current_offset', 0),
+                        "progress_percent": round((stat.get('rows_processed', 0) / max(stat.get('total_rows_estimated', 1), 1)) * 100, 2) if stat.get('total_rows_estimated', -1) > 0 else 0,
+                        "errors_count": stat.get('errors_count', 0),
+                        "queue_overflow_stops": stat.get('queue_overflow_stops', 0),
+                        "last_activity_time": stat.get('last_activity_time')
                     })
                 
                 # Get target thread status
@@ -561,7 +567,7 @@ class MetricsService:
                     # Determine status based on thread state
                     if stat.get('is_running', False):
                         status = 'running'
-                    elif stat.get('events_processed', 0) > 0:
+                    elif stat.get('events_processed', 0) > 0 or stat.get('batch_records_processed', 0) > 0:
                         status = 'active'  # Has processed data but not currently running
                     else:
                         status = 'unknown'
@@ -570,7 +576,16 @@ class MetricsService:
                         "target": target_name,
                         "status": status,
                         "events_processed": stat.get('events_processed', 0),
-                        "errors_count": stat.get('errors_count', 0)
+                        "records_saved": stat.get('batch_records_processed', 0) + stat.get('init_batch_records_processed', 0),
+                        "batch_operations": stat.get('batch_operations', 0) + stat.get('init_batch_operations', 0),
+                        "inserts_processed": stat.get('inserts_processed', 0),
+                        "updates_processed": stat.get('updates_processed', 0),
+                        "deletes_processed": stat.get('deletes_processed', 0),
+                        "init_query_events": stat.get('init_query_events_processed', 0),
+                        "errors_count": stat.get('errors_count', 0),
+                        "queue_overflow_count": stat.get('queue_overflow_count', 0),
+                        "queue_size": stat.get('queue_size', 0),
+                        "queue_usage_percent": stat.get('queue_usage_percent', 0)
                     })
                 
                 # Get source thread status
@@ -595,7 +610,8 @@ class MetricsService:
                         "source": source_name,
                         "status": status,
                         "events_processed": stat.get('events_processed', 0),
-                        "errors_count": stat.get('errors_count', 0)
+                        "errors_count": stat.get('errors_count', 0),
+                        "last_event_time": stat.get('last_event_time')
                     })
                 
                 return thread_health
