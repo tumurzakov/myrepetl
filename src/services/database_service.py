@@ -210,6 +210,10 @@ class DatabaseService:
         """Check if connection exists in the pool"""
         return connection_name in self._connections
     
+    def config_exists(self, connection_name: str) -> bool:
+        """Check if configuration exists for connection"""
+        return connection_name in self._connection_configs
+    
     def get_connection_status(self, connection_name: str) -> Dict[str, Any]:
         """Get detailed connection status"""
         status = {
@@ -288,8 +292,15 @@ class DatabaseService:
                     config = self._connection_configs[connection_name]
                     self.logger.info("Attempting to reconnect", connection_name=connection_name)
                     try:
-                        # Use atomic methods for reconnection
-                        self._close_connection_atomic(connection_name)
+                        # Close only the connection, keep the config for reconnection
+                        if connection_name in self._connections:
+                            try:
+                                self._connections[connection_name].close()
+                            except Exception:
+                                pass
+                        self._remove_connection_only_atomic(connection_name)
+                        
+                        # Now reconnect using the preserved config
                         self._connect_atomic(config, connection_name)
                         self.logger.info("Successfully reconnected", connection_name=connection_name)
                         return True
@@ -426,11 +437,14 @@ class DatabaseService:
                 self.logger.warning("Connection not available, attempting to reconnect", 
                                   connection_name=connection_name)
                 if not self.reconnect_if_needed(connection_name):
-                    # If reconnection fails, check if we have configuration
+                    # If reconnection fails, provide detailed error message
                     if connection_name not in self._connection_configs:
-                        raise ConnectionError(f"No configuration found for connection: {connection_name}")
+                        raise ConnectionError(f"No configuration found for connection: {connection_name}. "
+                                            f"This usually means the connection was never established or "
+                                            f"the configuration was lost due to an error.")
                     else:
-                        raise ConnectionError(f"Could not establish connection: {connection_name}")
+                        raise ConnectionError(f"Could not establish connection: {connection_name}. "
+                                            f"Configuration exists but connection failed.")
             
             with self.get_cursor(connection_name) as cursor:
                 # Add LIMIT and OFFSET to the query

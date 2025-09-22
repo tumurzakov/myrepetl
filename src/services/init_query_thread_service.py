@@ -162,6 +162,9 @@ class InitQueryThread:
             try:
                 # Connect to source database
                 self.database_service.connect(source_config, source_connection_name)
+                self.logger.info("Successfully connected to source database", 
+                               mapping_key=self.mapping_key,
+                               source_connection_name=source_connection_name)
                 
                 # Get total count for progress tracking
                 total_count = self.database_service.get_init_query_total_count(
