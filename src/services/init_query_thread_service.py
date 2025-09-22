@@ -124,296 +124,391 @@ class InitQueryThread:
     def _run(self) -> None:
         """Main thread execution loop"""
         try:
-            with self._stats_lock:
-                self._stats['is_running'] = True
-                self._stats['last_activity_time'] = time.time()
+            self._initialize_run_state()
             
-            self.logger.info("Starting init query processing", mapping_key=self.mapping_key)
-            
-            # Get table mapping configuration
-            table_mapping = self.config.mapping.get(self.mapping_key)
-            if not table_mapping:
-                raise ETLException(f"Table mapping not found for {self.mapping_key}")
-            
-            if not table_mapping.init_query:
-                self.logger.info("No init query configured, skipping", mapping_key=self.mapping_key)
-                with self._stats_lock:
-                    self._stats['is_completed'] = True
-                    self._stats['completion_reason'] = 'no_init_query'
+            # Validate configuration and check if init query should run
+            validation_result = self._validate_and_prepare_init_query()
+            if not validation_result:
                 return
             
-            # Get target information
-            if table_mapping.target:
-                target_name = table_mapping.target
-                target_table_name = table_mapping.target_table
-            else:
-                # Legacy format
-                target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
+            table_mapping, target_name, target_table_name = validation_result
             
-            # Check if we should run init query based on configuration
-            if table_mapping.init_if_table_empty:
-                # Check if target table is empty only if init_if_table_empty is True
-                try:
-                    if not self.database_service.is_table_empty(target_table_name, target_name):
-                        self.logger.info("Target table not empty and init_if_table_empty=True, skipping init query", 
-                                       mapping_key=self.mapping_key, 
-                                       target_table=target_table_name)
-                        with self._stats_lock:
-                            self._stats['is_completed'] = True
-                            self._stats['completion_reason'] = 'table_not_empty'
-                        return
-                except Exception as e:
-                    self.logger.warning("Could not check if target table is empty, proceeding with init query", 
-                                      mapping_key=self.mapping_key, 
-                                      target_table=target_table_name, 
-                                      error=str(e))
-            else:
-                # init_if_table_empty=False, always run init query regardless of table state
-                self.logger.info("init_if_table_empty=False, running init query regardless of table state", 
+            # Execute init query processing
+            self._execute_init_query_processing(table_mapping, target_name, target_table_name)
+            
+        except Exception as e:
+            self._handle_fatal_error(e)
+        finally:
+            self._finalize_run_state()
+    
+    def _initialize_run_state(self) -> None:
+        """Initialize run state for thread execution"""
+        with self._stats_lock:
+            self._stats['is_running'] = True
+            self._stats['last_activity_time'] = time.time()
+        
+        self.logger.info("Starting init query processing", mapping_key=self.mapping_key)
+    
+    def _validate_and_prepare_init_query(self) -> Optional[tuple]:
+        """Validate configuration and prepare init query execution
+        
+        Returns:
+            Tuple of (table_mapping, target_name, target_table_name) if valid, None if should skip
+        """
+        # Get table mapping configuration
+        table_mapping = self.config.mapping.get(self.mapping_key)
+        if not table_mapping:
+            raise ETLException(f"Table mapping not found for {self.mapping_key}")
+        
+        if not table_mapping.init_query:
+            self.logger.info("No init query configured, skipping", mapping_key=self.mapping_key)
+            self._mark_completion('no_init_query')
+            return None
+        
+        # Get target information
+        target_name, target_table_name = self._get_target_info(table_mapping)
+        
+        # Check if we should run init query based on configuration
+        if not self._should_run_init_query(table_mapping, target_name, target_table_name):
+            return None
+        
+        return table_mapping, target_name, target_table_name
+    
+    def _get_target_info(self, table_mapping) -> tuple:
+        """Extract target name and table name from mapping configuration"""
+        if table_mapping.target:
+            target_name = table_mapping.target
+            target_table_name = table_mapping.target_table
+        else:
+            # Legacy format
+            target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
+        
+        return target_name, target_table_name
+    
+    def _should_run_init_query(self, table_mapping, target_name: str, target_table_name: str) -> bool:
+        """Check if init query should run based on configuration"""
+        if not table_mapping.init_if_table_empty:
+            # init_if_table_empty=False, always run init query regardless of table state
+            self.logger.info("init_if_table_empty=False, running init query regardless of table state", 
+                           mapping_key=self.mapping_key, 
+                           target_table=target_table_name)
+            return True
+        
+        # Check if target table is empty only if init_if_table_empty is True
+        try:
+            if not self.database_service.is_table_empty(target_table_name, target_name):
+                self.logger.info("Target table not empty and init_if_table_empty=True, skipping init query", 
                                mapping_key=self.mapping_key, 
                                target_table=target_table_name)
-            
-            # Get source configuration
-            source_config = self.config.get_source_config(self.source_name)
-            # Create unique connection name for each table to avoid conflicts
-            source_connection_name = f"init_source_{self.source_name}_{self.mapping_key.replace('.', '_')}"
-            
-            try:
-                # Connect to source database
-                self.database_service.connect(source_config, source_connection_name)
-                self.logger.info("Successfully connected to source database", 
-                               mapping_key=self.mapping_key,
-                               source_connection_name=source_connection_name)
-                
-                # Get total count for progress tracking
-                # Check connection before getting total count
-                if not self.database_service.is_connected(source_connection_name):
-                    self.logger.warning("Source connection lost before getting total count, attempting to reconnect", 
-                                      mapping_key=self.mapping_key,
-                                      source_connection=source_connection_name)
-                    
-                    if not self.database_service.reconnect_if_needed(source_connection_name):
-                        raise ConnectionError(f"Could not reconnect to source database: {source_connection_name}")
-                    
-                    self.logger.info("Successfully reconnected to source database for total count", 
-                                   mapping_key=self.mapping_key,
-                                   source_connection=source_connection_name)
-                
-                total_count = self.database_service.get_init_query_total_count(
-                    table_mapping.init_query, source_connection_name
-                )
-                
-                with self._stats_lock:
-                    self._stats['total_rows_estimated'] = total_count
-                
-                self.logger.info("Starting paginated init query processing", 
-                               mapping_key=self.mapping_key, 
-                               total_rows_estimated=total_count)
-                
-                # Process init query with pagination
-                page_size = 1000  # Process 1000 rows at a time
-                
-                # Check if we're resuming from a previous run
-                with self._stats_lock:
-                    offset = self._stats['current_offset']
-                
-                if offset > 0:
-                    self.logger.info("Resuming init query from previous position", 
-                                   mapping_key=self.mapping_key,
-                                   resume_offset=offset,
-                                   total_estimated=total_count)
-                
-                has_more = True
-                
-                while has_more and not self._is_shutdown_requested():
-                    # Check connection before executing query
-                    if not self.database_service.is_connected(source_connection_name):
-                        self.logger.warning("Source connection lost, attempting to reconnect", 
-                                          mapping_key=self.mapping_key,
-                                          source_connection=source_connection_name)
-                        
-                        if not self.database_service.reconnect_if_needed(source_connection_name):
-                            raise ConnectionError(f"Could not reconnect to source database: {source_connection_name}")
-                        
-                        self.logger.info("Successfully reconnected to source database", 
-                                       mapping_key=self.mapping_key,
-                                       source_connection=source_connection_name)
-                    
-                    # Execute paginated query
-                    results, columns, has_more = self.database_service.execute_init_query_paginated(
-                        table_mapping.init_query, source_connection_name, page_size, offset
-                    )
-                    
-                    if not results:
-                        break
-                    
-                    self.logger.info("Processing init query page", 
-                                   mapping_key=self.mapping_key,
-                                   page_size=len(results),
-                                   offset=offset,
-                                   has_more=has_more)
-                    
-                    # Process each row from current page
-                    page_processed = 0
-                    for row_data in results:
-                        if self._is_shutdown_requested():
-                            self.logger.info("Shutdown requested, stopping init query processing", 
-                                           mapping_key=self.mapping_key)
-                            break
-                        
-                        # Convert row to dictionary using column names
-                        row_dict = dict(zip(columns, row_data))
-                        
-                        # Create init query event
-                        init_query_event = InitQueryEvent(
-                            mapping_key=self.mapping_key,
-                            source_name=self.source_name,
-                            target_name=target_name,
-                            target_table=target_table_name,
-                            row_data=row_dict,
-                            columns=columns,
-                            init_query=table_mapping.init_query,
-                            primary_key=table_mapping.primary_key,
-                            column_mapping=table_mapping.column_mapping,
-                            filter_config=table_mapping.filter
-                        )
-                        
-                        # Publish event to message bus with retry logic
-                        success = self._publish_with_retry(init_query_event, target_name)
-                        
-                        if success:
-                            page_processed += 1
-                            with self._stats_lock:
-                                self._stats['rows_processed'] += 1
-                                self._stats['last_activity_time'] = time.time()
-                            
-                            # Update metrics
-                            if self.metrics_service:
-                                # Extract table name from mapping key
-                                table_name = self.mapping_key.split('.')[-1] if '.' in self.mapping_key else self.mapping_key
-                                self.metrics_service.record_init_record_sent(
-                                    self.source_name, table_name, self.mapping_key
-                                )
-                        else:
-                            # Queue overflow - stop processing to prevent data loss
-                            with self._stats_lock:
-                                self._stats['errors_count'] += 1
-                                self._stats['queue_overflow_stops'] += 1
-                                self._stats['is_completed'] = True
-                                self._stats['completion_reason'] = 'queue_overflow'
-                                self._stats['completion_error'] = f'Queue overflow: {current_queue_size}/{max_queue_size}'
-                            
-                            # Update metrics
-                            if self.metrics_service:
-                                self.metrics_service.record_error(
-                                    "queue_overflow", "init_query_thread", 
-                                    self.source_name, self.target_name
-                                )
-                            
-                            self.logger.error("Queue overflow detected, stopping init query processing to prevent data loss", 
-                                            mapping_key=self.mapping_key,
-                                            source_name=self.source_name,
-                                            target_name=target_name,
-                                            processed_rows=self._stats['rows_processed'],
-                                            current_offset=offset + page_processed,
-                                            total_estimated=total_count)
-                            
-                            # Mark as not completed so it can be resumed later
-                            with self._stats_lock:
-                                self._stats['current_offset'] = offset + page_processed
-                                self._stats['is_completed'] = False  # Override to False for resumption
-                            
-                            return  # Stop processing immediately
-                    
-                    # Update statistics for completed page
-                    with self._stats_lock:
-                        self._stats['pages_processed'] += 1
-                        self._stats['current_offset'] = offset + len(results)
-                    
-                    # Update metrics for batch size
-                    if self.metrics_service and results:
-                        table_name = self.mapping_key.split('.')[-1] if '.' in self.mapping_key else self.mapping_key
-                        self.metrics_service.record_init_batch_size(
-                            self.source_name, table_name, len(results)
-                        )
-                    
-                    offset += page_size
-                    
-                    # Log progress
-                    if total_count > 0:
-                        progress_percent = (self._stats['current_offset'] / total_count) * 100
-                        self.logger.info("Init query progress", 
-                                       mapping_key=self.mapping_key,
-                                       processed_rows=self._stats['rows_processed'],
-                                       total_estimated=total_count,
-                                       progress_percent=f"{progress_percent:.1f}%",
-                                       pages_processed=self._stats['pages_processed'])
-                
-                # Mark as completed if we processed all pages
-                if not self._is_shutdown_requested():
-                    with self._stats_lock:
-                        self._stats['is_completed'] = True
-                        self._stats['completion_reason'] = 'completed_successfully'
-                    
-                    self.logger.info("Init query processing completed", 
-                                   mapping_key=self.mapping_key, 
-                                   total_processed=self._stats['rows_processed'],
-                                   pages_processed=self._stats['pages_processed'])
-                
-            except Exception as e:
-                with self._stats_lock:
-                    self._stats['errors_count'] += 1
-                    self._stats['is_completed'] = True
-                    self._stats['completion_reason'] = 'execution_error'
-                    self._stats['completion_error'] = str(e)
-                
-                # Update metrics
-                if self.metrics_service:
-                    self.metrics_service.record_error(
-                        "init_query_execution", "init_query_thread", 
-                        self.source_name, self.target_name
-                    )
-                
-                self.logger.error("Error executing init query", 
-                                mapping_key=self.mapping_key, 
-                                error=str(e))
-                raise
-            finally:
-                # Close source connection but keep config for potential reuse
-                try:
-                    if source_connection_name in self.database_service._connections:
-                        connection = self.database_service._connections[source_connection_name]
-                        if connection:
-                            connection.close()
-                        # Remove only connection, keep config
-                        self.database_service._remove_connection_only_atomic(source_connection_name)
-                except Exception as e:
-                    self.logger.warning("Error closing source connection", 
-                                      connection_name=source_connection_name, 
-                                      error=str(e))
-        
+                self._mark_completion('table_not_empty')
+                return False
         except Exception as e:
-            with self._stats_lock:
-                self._stats['errors_count'] += 1
-                self._stats['is_completed'] = True
-                self._stats['completion_reason'] = 'fatal_error'
-                self._stats['completion_error'] = str(e)
-            
-            # Update metrics
-            if self.metrics_service:
-                self.metrics_service.record_error(
-                    "fatal_error", "init_query_thread", 
-                    self.source_name, self.target_name
-                )
-            
-            self.logger.error("Fatal error in init query thread", 
-                            mapping_key=self.mapping_key, 
-                            error=str(e))
-        finally:
-            with self._stats_lock:
-                self._stats['is_running'] = False
-                self._stats['last_activity_time'] = time.time()
+            self.logger.warning("Could not check if target table is empty, proceeding with init query", 
+                              mapping_key=self.mapping_key, 
+                              target_table=target_table_name, 
+                              error=str(e))
+        
+        return True
     
+    def _execute_init_query_processing(self, table_mapping, target_name: str, target_table_name: str) -> None:
+        """Execute the main init query processing logic"""
+        source_connection_name = self._setup_source_connection()
+        
+        try:
+            total_count = self._get_total_count_with_reconnect(table_mapping, source_connection_name)
+            self._process_paginated_query(table_mapping, target_name, target_table_name, 
+                                        source_connection_name, total_count)
+        except Exception as e:
+            self._handle_execution_error(e, target_name)
+            raise
+        finally:
+            self._cleanup_source_connection(source_connection_name)
+    
+    def _setup_source_connection(self) -> str:
+        """Setup and connect to source database"""
+        source_config = self.config.get_source_config(self.source_name)
+        source_connection_name = f"init_source_{self.source_name}_{self.mapping_key.replace('.', '_')}"
+        
+        self.database_service.connect(source_config, source_connection_name)
+        self.logger.info("Successfully connected to source database", 
+                       mapping_key=self.mapping_key,
+                       source_connection_name=source_connection_name)
+        
+        return source_connection_name
+    
+    def _get_total_count_with_reconnect(self, table_mapping, source_connection_name: str) -> int:
+        """Get total count with reconnection if needed"""
+        self._ensure_connection(source_connection_name, "getting total count")
+        
+        total_count = self.database_service.get_init_query_total_count(
+            table_mapping.init_query, source_connection_name
+        )
+        
+        with self._stats_lock:
+            self._stats['total_rows_estimated'] = total_count
+        
+        self.logger.info("Starting paginated init query processing", 
+                       mapping_key=self.mapping_key, 
+                       total_rows_estimated=total_count)
+        
+        return total_count
+    
+    def _process_paginated_query(self, table_mapping, target_name: str, target_table_name: str,
+                               source_connection_name: str, total_count: int) -> None:
+        """Process init query with pagination"""
+        page_size = 1000  # Process 1000 rows at a time
+        
+        # Check if we're resuming from a previous run
+        with self._stats_lock:
+            offset = self._stats['current_offset']
+        
+        if offset > 0:
+            self.logger.info("Resuming init query from previous position", 
+                           mapping_key=self.mapping_key,
+                           resume_offset=offset,
+                           total_estimated=total_count)
+        
+        has_more = True
+        
+        while has_more and not self._is_shutdown_requested():
+            self._ensure_connection(source_connection_name, "executing query")
+            
+            # Execute paginated query
+            results, columns, has_more = self.database_service.execute_init_query_paginated(
+                table_mapping.init_query, source_connection_name, page_size, offset
+            )
+            
+            if not results:
+                break
+            
+            self.logger.info("Processing init query page", 
+                           mapping_key=self.mapping_key,
+                           page_size=len(results),
+                           offset=offset,
+                           has_more=has_more)
+            
+            # Process page results
+            page_processed = self._process_page_results(
+                results, columns, table_mapping, target_name, target_table_name, offset, total_count
+            )
+            
+            if page_processed < len(results):
+                # Queue overflow occurred, processing stopped
+                return
+            
+            # Update statistics and metrics for completed page
+            self._update_page_completion_stats(results, offset)
+            
+            offset += page_size
+            self._log_progress(total_count)
+        
+        # Mark as completed if we processed all pages
+        if not self._is_shutdown_requested():
+            self._mark_completion('completed_successfully')
+            
+            self.logger.info("Init query processing completed", 
+                           mapping_key=self.mapping_key, 
+                           total_processed=self._stats['rows_processed'],
+                           pages_processed=self._stats['pages_processed'])
+    
+    def _process_page_results(self, results: List, columns: List, table_mapping, 
+                            target_name: str, target_table_name: str, 
+                            offset: int, total_count: int) -> int:
+        """Process results from a single page
+        
+        Returns:
+            Number of rows successfully processed
+        """
+        page_processed = 0
+        
+        for row_data in results:
+            if self._is_shutdown_requested():
+                self.logger.info("Shutdown requested, stopping init query processing", 
+                               mapping_key=self.mapping_key)
+                break
+            
+            # Convert row to dictionary using column names
+            row_dict = dict(zip(columns, row_data))
+            
+            # Create and publish init query event
+            success = self._create_and_publish_event(
+                row_dict, columns, table_mapping, target_name, target_table_name
+            )
+            
+            if success:
+                page_processed += 1
+                self._update_row_processed_stats()
+            else:
+                # Queue overflow - stop processing to prevent data loss
+                self._handle_queue_overflow(target_name, offset + page_processed, total_count)
+                break
+        
+        return page_processed
+    
+    def _create_and_publish_event(self, row_dict: Dict, columns: List, table_mapping,
+                                target_name: str, target_table_name: str) -> bool:
+        """Create init query event and publish it"""
+        init_query_event = InitQueryEvent(
+            mapping_key=self.mapping_key,
+            source_name=self.source_name,
+            target_name=target_name,
+            target_table=target_table_name,
+            row_data=row_dict,
+            columns=columns,
+            init_query=table_mapping.init_query,
+            primary_key=table_mapping.primary_key,
+            column_mapping=table_mapping.column_mapping,
+            filter_config=table_mapping.filter
+        )
+        
+        # Publish event to message bus with retry logic
+        success = self._publish_with_retry(init_query_event, target_name)
+        
+        if success and self.metrics_service:
+            # Update metrics
+            table_name = self.mapping_key.split('.')[-1] if '.' in self.mapping_key else self.mapping_key
+            self.metrics_service.record_init_record_sent(
+                self.source_name, table_name, self.mapping_key
+            )
+        
+        return success
+    
+    def _ensure_connection(self, source_connection_name: str, operation: str) -> None:
+        """Ensure database connection is active, reconnect if needed"""
+        if not self.database_service.is_connected(source_connection_name):
+            self.logger.warning(f"Source connection lost during {operation}, attempting to reconnect", 
+                              mapping_key=self.mapping_key,
+                              source_connection=source_connection_name)
+            
+            if not self.database_service.reconnect_if_needed(source_connection_name):
+                raise ConnectionError(f"Could not reconnect to source database: {source_connection_name}")
+            
+            self.logger.info(f"Successfully reconnected to source database for {operation}", 
+                           mapping_key=self.mapping_key,
+                           source_connection=source_connection_name)
+    
+    def _mark_completion(self, reason: str, error: str = None) -> None:
+        """Mark thread completion with given reason"""
+        with self._stats_lock:
+            self._stats['is_completed'] = True
+            self._stats['completion_reason'] = reason
+            if error:
+                self._stats['completion_error'] = error
+    
+    def _update_row_processed_stats(self) -> None:
+        """Update statistics for processed row"""
+        with self._stats_lock:
+            self._stats['rows_processed'] += 1
+            self._stats['last_activity_time'] = time.time()
+    
+    def _update_page_completion_stats(self, results: List, offset: int) -> None:
+        """Update statistics for completed page"""
+        with self._stats_lock:
+            self._stats['pages_processed'] += 1
+            self._stats['current_offset'] = offset + len(results)
+        
+        # Update metrics for batch size
+        if self.metrics_service and results:
+            table_name = self.mapping_key.split('.')[-1] if '.' in self.mapping_key else self.mapping_key
+            self.metrics_service.record_init_batch_size(
+                self.source_name, table_name, len(results)
+            )
+    
+    def _log_progress(self, total_count: int) -> None:
+        """Log processing progress"""
+        if total_count > 0:
+            progress_percent = (self._stats['current_offset'] / total_count) * 100
+            self.logger.info("Init query progress", 
+                           mapping_key=self.mapping_key,
+                           processed_rows=self._stats['rows_processed'],
+                           total_estimated=total_count,
+                           progress_percent=f"{progress_percent:.1f}%",
+                           pages_processed=self._stats['pages_processed'])
+    
+    def _handle_queue_overflow(self, target_name: str, current_offset: int, total_count: int) -> None:
+        """Handle queue overflow condition"""
+        with self._stats_lock:
+            self._stats['errors_count'] += 1
+            self._stats['queue_overflow_stops'] += 1
+            self._stats['is_completed'] = True
+            self._stats['completion_reason'] = 'queue_overflow'
+            self._stats['completion_error'] = 'Queue overflow detected'
+            self._stats['current_offset'] = current_offset
+            self._stats['is_completed'] = False  # Override to False for resumption
+        
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.record_error(
+                "queue_overflow", "init_query_thread", 
+                self.source_name, target_name
+            )
+        
+        self.logger.error("Queue overflow detected, stopping init query processing to prevent data loss", 
+                        mapping_key=self.mapping_key,
+                        source_name=self.source_name,
+                        target_name=target_name,
+                        processed_rows=self._stats['rows_processed'],
+                        current_offset=current_offset,
+                        total_estimated=total_count)
+    
+    def _handle_execution_error(self, error: Exception, target_name: str) -> None:
+        """Handle execution errors during init query processing"""
+        with self._stats_lock:
+            self._stats['errors_count'] += 1
+            self._stats['is_completed'] = True
+            self._stats['completion_reason'] = 'execution_error'
+            self._stats['completion_error'] = str(error)
+        
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.record_error(
+                "init_query_execution", "init_query_thread", 
+                self.source_name, target_name
+            )
+        
+        self.logger.error("Error executing init query", 
+                        mapping_key=self.mapping_key, 
+                        error=str(error))
+    
+    def _handle_fatal_error(self, error: Exception) -> None:
+        """Handle fatal errors in thread execution"""
+        with self._stats_lock:
+            self._stats['errors_count'] += 1
+            self._stats['is_completed'] = True
+            self._stats['completion_reason'] = 'fatal_error'
+            self._stats['completion_error'] = str(error)
+        
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.record_error(
+                "fatal_error", "init_query_thread", 
+                self.source_name, self.target_name
+            )
+        
+        self.logger.error("Fatal error in init query thread", 
+                        mapping_key=self.mapping_key, 
+                        error=str(error))
+    
+    def _cleanup_source_connection(self, source_connection_name: str) -> None:
+        """Cleanup source database connection"""
+        try:
+            if source_connection_name in self.database_service._connections:
+                connection = self.database_service._connections[source_connection_name]
+                if connection:
+                    connection.close()
+                # Remove only connection, keep config
+                self.database_service._remove_connection_only_atomic(source_connection_name)
+        except Exception as e:
+            self.logger.warning("Error closing source connection", 
+                              connection_name=source_connection_name, 
+                              error=str(e))
+    
+    def _finalize_run_state(self) -> None:
+        """Finalize run state after thread execution"""
+        with self._stats_lock:
+            self._stats['is_running'] = False
+            self._stats['last_activity_time'] = time.time()
+
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""
         with self._shutdown_lock:
