@@ -87,12 +87,14 @@ class DatabaseService:
                 self.logger.warning("Command Out of Sync error in cursor, forcing connection reset", 
                                   connection_name=connection_name)
                 # Force connection reset by removing it from pool
+                # Keep configuration but remove connection to allow reconnection
                 if connection_name in self._connections:
                     try:
                         self._connections[connection_name].close()
                     except Exception:
                         pass
                     del self._connections[connection_name]
+                # Note: Keep _connection_configs[connection_name] for reconnection
             
             raise
         finally:
@@ -255,12 +257,14 @@ class DatabaseService:
                                       error_code=error_code,
                                       error_message=str(e))
                     # Mark connection as invalid so it gets recreated
+                    # Keep configuration but remove connection to allow reconnection
                     if connection_name in self._connections:
                         try:
                             self._connections[connection_name].close()
                         except Exception:
                             pass
                         del self._connections[connection_name]
+                    # Note: Keep _connection_configs[connection_name] for reconnection
                 else:
                     self.logger.debug("MySQL connection error detected", 
                                     connection_name=connection_name, 
@@ -395,7 +399,11 @@ class DatabaseService:
                 self.logger.warning("Connection not available, attempting to reconnect", 
                                   connection_name=connection_name)
                 if not self.reconnect_if_needed(connection_name):
-                    raise ConnectionError(f"Could not establish connection: {connection_name}")
+                    # If reconnection fails, check if we have configuration
+                    if connection_name not in self._connection_configs:
+                        raise ConnectionError(f"No configuration found for connection: {connection_name}")
+                    else:
+                        raise ConnectionError(f"Could not establish connection: {connection_name}")
             
             with self.get_cursor(connection_name) as cursor:
                 # Add LIMIT and OFFSET to the query
