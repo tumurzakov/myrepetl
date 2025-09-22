@@ -807,13 +807,23 @@ class InitQueryThreadService:
                     
                     # Only consider threads that were stopped due to recoverable conditions
                     # Skip threads that completed successfully or had fatal errors
-                    if completion_reason in [None, 'queue_overflow', 'execution_error']:
+                    if completion_reason in [None, 'queue_overflow']:
                         incomplete.append(mapping_key)
                         self.logger.debug("Found incomplete init query thread", 
                                         mapping_key=mapping_key,
                                         completion_reason=completion_reason,
                                         is_running=thread.is_running(),
                                         is_completed=thread.is_completed())
+                    elif completion_reason == 'execution_error':
+                        # For execution errors, check if the thread is actually completed
+                        # Only consider it incomplete if it's not completed (connection errors)
+                        if not thread.is_completed():
+                            incomplete.append(mapping_key)
+                            self.logger.debug("Found incomplete init query thread (execution error)", 
+                                            mapping_key=mapping_key,
+                                            completion_reason=completion_reason,
+                                            is_running=thread.is_running(),
+                                            is_completed=thread.is_completed())
             return incomplete
     
     def resume_init_query_thread(self, mapping_key: str, config: ETLConfig) -> bool:

@@ -530,8 +530,10 @@ class MetricsService:
                     elif stat.get('rows_processed', 0) > 0:
                         # Check completion reason to determine if thread can be resumed
                         completion_reason = stat.get('completion_reason')
-                        if completion_reason in [None, 'queue_overflow', 'execution_error']:
+                        if completion_reason in [None, 'queue_overflow']:
                             status = 'incomplete'  # Can be resumed
+                        elif completion_reason == 'execution_error' and not stat.get('is_completed', False):
+                            status = 'incomplete'  # Can be resumed (connection errors)
                         else:
                             status = 'stopped'  # Stopped for other reasons
                     else:
