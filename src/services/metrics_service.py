@@ -19,11 +19,16 @@ class MetricsService:
     def __init__(self, registry: Optional[CollectorRegistry] = None):
         self.logger = structlog.get_logger()
         self.registry = registry or CollectorRegistry()
+        self.thread_manager = None  # Will be set later
         
         # Initialize all metrics
         self._init_metrics()
         
         self.logger.info("Metrics service initialized")
+    
+    def set_thread_manager(self, thread_manager) -> None:
+        """Set thread manager reference for health checks"""
+        self.thread_manager = thread_manager
     
     def _init_metrics(self) -> None:
         """Initialize all Prometheus metrics"""
@@ -501,13 +506,75 @@ class MetricsService:
     def _get_thread_health(self) -> Dict[str, Any]:
         """Get thread health status"""
         thread_health = {
-            "init_threads": {"status": "unknown", "count": 0, "details": []},
-            "target_threads": {"status": "unknown", "count": 0, "details": []},
-            "source_threads": {"status": "unknown", "count": 0, "details": []}
+            "init_threads": {"status": "unknown", "count": 0, "details": [], "total": 0},
+            "target_threads": {"status": "unknown", "count": 0, "details": [], "total": 0},
+            "source_threads": {"status": "unknown", "count": 0, "details": [], "total": 0}
         }
         
-        # Get init thread status from metrics
+        # Try to get thread status from ThreadManager first (more reliable)
+        if self.thread_manager:
+            try:
+                stats = self.thread_manager.get_stats()
+                
+                # Get init thread status
+                init_stats = stats.init_query_stats
+                init_running = sum(1 for s in init_stats.values() if s.get('status') == 'running')
+                init_total = len(init_stats)
+                
+                thread_health["init_threads"]["count"] = init_running
+                thread_health["init_threads"]["total"] = init_total
+                thread_health["init_threads"]["status"] = "healthy" if init_running > 0 else "warning" if init_total > 0 else "unknown"
+                
+                for mapping_key, stat in init_stats.items():
+                    thread_health["init_threads"]["details"].append({
+                        "mapping": mapping_key,
+                        "status": stat.get('status', 'unknown'),
+                        "rows_processed": stat.get('rows_processed', 0),
+                        "errors_count": stat.get('errors_count', 0)
+                    })
+                
+                # Get target thread status
+                target_stats = stats.target_stats
+                target_running = sum(1 for s in target_stats.values() if s.get('status') == 'running')
+                target_total = len(target_stats)
+                
+                thread_health["target_threads"]["count"] = target_running
+                thread_health["target_threads"]["total"] = target_total
+                thread_health["target_threads"]["status"] = "healthy" if target_running > 0 else "warning" if target_total > 0 else "unknown"
+                
+                for target_name, stat in target_stats.items():
+                    thread_health["target_threads"]["details"].append({
+                        "target": target_name,
+                        "status": stat.get('status', 'unknown'),
+                        "events_processed": stat.get('events_processed', 0),
+                        "errors_count": stat.get('errors_count', 0)
+                    })
+                
+                # Get source thread status
+                source_stats = stats.source_stats
+                source_running = sum(1 for s in source_stats.values() if s.get('status') == 'running')
+                source_total = len(source_stats)
+                
+                thread_health["source_threads"]["count"] = source_running
+                thread_health["source_threads"]["total"] = source_total
+                thread_health["source_threads"]["status"] = "healthy" if source_running > 0 else "warning" if source_total > 0 else "unknown"
+                
+                for source_name, stat in source_stats.items():
+                    thread_health["source_threads"]["details"].append({
+                        "source": source_name,
+                        "status": stat.get('status', 'unknown'),
+                        "events_processed": stat.get('events_processed', 0),
+                        "errors_count": stat.get('errors_count', 0)
+                    })
+                
+                return thread_health
+                
+            except Exception as e:
+                self.logger.warning("Failed to get thread status from ThreadManager", error=str(e))
+        
+        # Fallback to metrics if ThreadManager is not available
         try:
+            # Get init thread status from metrics
             init_threads_running = 0
             init_threads_total = 0
             for sample in self.init_thread_status.collect()[0].samples:
@@ -535,7 +602,7 @@ class MetricsService:
         except Exception:
             thread_health["init_threads"]["status"] = "error"
         
-        # Get target thread status
+        # Get target thread status from metrics
         try:
             target_threads_running = 0
             target_threads_total = 0
@@ -560,7 +627,7 @@ class MetricsService:
         except Exception:
             thread_health["target_threads"]["status"] = "error"
         
-        # Get source thread status
+        # Get source thread status from metrics
         try:
             source_threads_running = 0
             source_threads_total = 0

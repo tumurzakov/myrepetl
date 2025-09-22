@@ -89,6 +89,9 @@ class ETLService:
                 metrics_service=self.metrics_service
             )
             
+            # Set thread manager reference in metrics service for health checks
+            self.metrics_service.set_thread_manager(self.thread_manager)
+            
             # Initialize metrics endpoint
             metrics_port = self.config.metrics_port
             self.metrics_endpoint = MetricsEndpoint(
