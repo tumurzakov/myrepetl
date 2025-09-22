@@ -598,8 +598,9 @@ class InitQueryThread:
             queue_size = self.message_bus.get_queue_size()
             queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
             
-            # If queue is more than 90% full, stop immediately to prevent data loss
-            if queue_usage_percent > 90:
+            # If queue is more than 95% full, stop immediately to prevent data loss
+            # Increased threshold to be more aggressive about continuing
+            if queue_usage_percent > 95:
                 self.logger.error(f"Message bus queue critically full ({queue_usage_percent:.1f}%), stopping init query to prevent data loss", 
                                 mapping_key=self.mapping_key,
                                 queue_usage_percent=queue_usage_percent,

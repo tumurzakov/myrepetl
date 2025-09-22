@@ -88,6 +88,8 @@ class ThreadManager:
         self._monitoring_thread: Optional[threading.Thread] = None
         self._monitoring_thread_lock = threading.Lock()
         self._monitoring_interval = 30.0  # seconds
+        self._init_check_interval = 10.0  # Check init threads every 10 seconds
+        self._last_init_check_time = 0.0
         
         self.logger.info("Thread manager initialized")
     
@@ -453,8 +455,11 @@ class ThreadManager:
                     # Check target connection health
                     self._check_target_connection_health()
                     
-                    # Check init query threads and resume if needed
-                    self._check_init_query_thread_health()
+                    # Check init query threads and resume if needed (more frequently)
+                    current_time = time.time()
+                    if current_time - self._last_init_check_time >= self._init_check_interval:
+                        self._check_init_query_thread_health()
+                        self._last_init_check_time = current_time
                     
                     # Check if replication should be started after init completion
                     self._check_replication_start_after_init()
@@ -486,7 +491,7 @@ class ThreadManager:
             running_count = self.init_query_thread_service.get_active_threads_count()
             completed_count = self.init_query_thread_service.get_completed_threads_count()
             
-            self.logger.debug("Init query threads status", 
+            self.logger.info("Init query threads status", 
                             total_threads=len(all_stats),
                             running_count=running_count,
                             completed_count=completed_count,
@@ -502,7 +507,9 @@ class ThreadManager:
                 queue_size = self.message_bus.get_queue_size()
                 queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
                 
-                if queue_usage_percent < 50:  # Only resume if queue is less than 50% full
+                # Resume threads if queue is not critically full
+                # Use a higher threshold (80%) to be more aggressive about resuming threads
+                if queue_usage_percent < 80:  # Resume if queue is less than 80% full
                     for mapping_key in incomplete_threads:
                         try:
                             success = self.init_query_thread_service.resume_init_query_thread(mapping_key, config)
