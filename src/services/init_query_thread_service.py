@@ -8,7 +8,7 @@ import time
 from typing import Dict, Any, Optional, List
 from queue import Queue, Empty
 
-from ..exceptions import ETLException
+from ..exceptions import ETLException, ConnectionError
 from ..models.config import DatabaseConfig, ETLConfig
 from ..models.events import InitQueryEvent
 from .database_service import DatabaseService
@@ -186,6 +186,19 @@ class InitQueryThread:
                                source_connection_name=source_connection_name)
                 
                 # Get total count for progress tracking
+                # Check connection before getting total count
+                if not self.database_service.is_connected(source_connection_name):
+                    self.logger.warning("Source connection lost before getting total count, attempting to reconnect", 
+                                      mapping_key=self.mapping_key,
+                                      source_connection=source_connection_name)
+                    
+                    if not self.database_service.reconnect_if_needed(source_connection_name):
+                        raise ConnectionError(f"Could not reconnect to source database: {source_connection_name}")
+                    
+                    self.logger.info("Successfully reconnected to source database for total count", 
+                                   mapping_key=self.mapping_key,
+                                   source_connection=source_connection_name)
+                
                 total_count = self.database_service.get_init_query_total_count(
                     table_mapping.init_query, source_connection_name
                 )
@@ -213,6 +226,19 @@ class InitQueryThread:
                 has_more = True
                 
                 while has_more and not self._is_shutdown_requested():
+                    # Check connection before executing query
+                    if not self.database_service.is_connected(source_connection_name):
+                        self.logger.warning("Source connection lost, attempting to reconnect", 
+                                          mapping_key=self.mapping_key,
+                                          source_connection=source_connection_name)
+                        
+                        if not self.database_service.reconnect_if_needed(source_connection_name):
+                            raise ConnectionError(f"Could not reconnect to source database: {source_connection_name}")
+                        
+                        self.logger.info("Successfully reconnected to source database", 
+                                       mapping_key=self.mapping_key,
+                                       source_connection=source_connection_name)
+                    
                     # Execute paginated query
                     results, columns, has_more = self.database_service.execute_init_query_paginated(
                         table_mapping.init_query, source_connection_name, page_size, offset
