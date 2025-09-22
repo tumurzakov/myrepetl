@@ -358,7 +358,7 @@ class InitQueryThread:
             
             # If queue is more than 90% full, stop immediately to prevent data loss
             if queue_usage_percent > 90:
-                self.logger.error("Message bus queue critically full ({:.1f}%), stopping init query to prevent data loss", 
+                self.logger.error(f"Message bus queue critically full ({queue_usage_percent:.1f}%), stopping init query to prevent data loss", 
                                 mapping_key=self.mapping_key,
                                 queue_usage_percent=queue_usage_percent,
                                 queue_size=queue_size,
