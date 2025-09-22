@@ -165,11 +165,11 @@ class TestConfigService:
             replication=Mock(),
             mapping={
                 "source1.table": Mock(
-                    target_table="target1.table",
+                    target_table="table",
+                    target="target1",
                     primary_key="id",
                     column_mapping={"id": Mock(column="id")},
-                    source=None,
-                    target=None
+                    source=None
                 )
             }
         )

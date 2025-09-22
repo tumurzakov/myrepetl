@@ -185,16 +185,6 @@ class ETLConfig:
             raise ConfigurationError(f"Target '{target_name}' not found")
         return self.targets[target_name]
     
-    def parse_target_table(self, target_table: str) -> Tuple[str, str]:
-        """Parse target table string like 'target1.users' into (target_name, table_name)"""
-        if '.' not in target_table:
-            raise ConfigurationError(f"Target table must be in format 'target_name.table_name', got: {target_table}")
-        
-        target_name, table_name = target_table.split('.', 1)
-        if target_name not in self.targets:
-            raise ConfigurationError(f"Target '{target_name}' not found in configuration")
-        
-        return target_name, table_name
     
     def get_mapping_by_source_table(self, source_table: str) -> Optional[TableMapping]:
         """Get table mapping by source_table field"""

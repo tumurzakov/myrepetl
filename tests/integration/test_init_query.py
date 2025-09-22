@@ -42,7 +42,8 @@ class TestInitQuery:
             "mapping": {
                 "source1.users": {
                     "init_query": "SELECT * FROM users WHERE status = 'active'",
-                    "target_table": "target1.users",
+                    "target_table": "users",
+                    "target": "target1",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -107,7 +108,8 @@ class TestInitQuery:
             "mapping": {
                 "source1.users": {
                     "init_query": "SELECT * FROM users WHERE status = 'active'",
-                    "target_table": "target1.users",
+                    "target_table": "users",
+                    "target": "target1",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -176,7 +178,8 @@ class TestInitQuery:
             "mapping": {
                 "source1.users": {
                     "init_query": "SELECT * FROM users WHERE status = 'active'",
-                    "target_table": "target1.users",
+                    "target_table": "users",
+                    "target": "target1",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},
@@ -244,7 +247,8 @@ class TestInitQuery:
             "mapping": {
                 "source1.users": {
                     "init_query": "SELECT * FROM users",
-                    "target_table": "target1.users",
+                    "target_table": "users",
+                    "target": "target1",
                     "primary_key": "id",
                     "column_mapping": {
                         "id": {"column": "id", "primary_key": True},

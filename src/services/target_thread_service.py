@@ -211,7 +211,12 @@ class TargetThread:
                 target_name = table_mapping.target
                 target_table_name = table_mapping.target_table
             else:
-                # Legacy format: parse target_table
+                # Legacy format: parse target_table (should not happen in new configs)
+                self.logger.warning("Using legacy target table format, consider updating configuration", 
+                                  schema=event.schema, 
+                                  table=event.table, 
+                                  source_name=event.source_name,
+                                  target_table=table_mapping.target_table)
                 target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
             
             if target_name != self.target_name:

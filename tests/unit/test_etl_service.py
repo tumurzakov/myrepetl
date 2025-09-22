@@ -226,7 +226,8 @@ class TestETLService:
             mock_config = Mock()
             mock_mapping = Mock()
             mock_mapping.init_query = "SELECT * FROM users"
-            mock_mapping.target_table = "target1.users"
+            mock_mapping.target_table = "users"  # New format: just table name
+            mock_mapping.target = "target1"      # New format: target field
             mock_mapping.source_table = "source1.users"
             mock_mapping.column_mapping = {"id": Mock(), "name": Mock()}
             mock_mapping.primary_key = "id"
@@ -236,7 +237,6 @@ class TestETLService:
                 "source1.users": mock_mapping
             }
             mock_config.sources = {"source1": Mock()}
-            mock_config.parse_target_table.return_value = ("target1", "users")
             mock_config.parse_source_table.return_value = ("source1", "users")
             mock_config.get_source_config.return_value = Mock()
             

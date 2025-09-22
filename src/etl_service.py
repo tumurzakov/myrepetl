@@ -199,8 +199,17 @@ class ETLService:
                 if not table_mapping.init_query:
                     continue
                 
-                # Parse target table to get target name and table name
-                target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
+                # Get target information from mapping
+                if table_mapping.target:
+                    # New format: use target field
+                    target_name = table_mapping.target
+                    target_table_name = table_mapping.target_table
+                else:
+                    # Legacy format: parse target_table (should not happen in new configs)
+                    self.logger.warning("Using legacy target table format, consider updating configuration", 
+                                      mapping_key=mapping_key, 
+                                      target_table=table_mapping.target_table)
+                    target_name, target_table_name = self.config.parse_target_table(table_mapping.target_table)
                 
                 # Check if target table is empty (with error handling)
                 try:

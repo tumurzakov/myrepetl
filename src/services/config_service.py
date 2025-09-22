@@ -80,6 +80,7 @@ class ConfigService:
                 
                 # Validate target table format (target_name.table_name) - only if no target field
                 if not table_mapping.target:
+                    # Legacy format validation - should not happen in new configs
                     try:
                         config.parse_target_table(table_mapping.target_table)
                     except ConfigurationError:
