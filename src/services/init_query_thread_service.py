@@ -853,6 +853,25 @@ class InitQueryThreadService:
                                             completion_reason=completion_reason,
                                             is_running=is_running,
                                             is_completed=is_completed)
+                
+                # Also check for threads that are "running" but haven't had activity for a long time
+                # This catches threads that are stuck in some state
+                elif not is_completed and is_running:
+                    import time
+                    last_activity = stats.get('last_activity_time', 0)
+                    current_time = time.time()
+                    time_since_activity = current_time - last_activity if last_activity else float('inf')
+                    
+                    # If thread hasn't had activity for more than 5 minutes, consider it stuck
+                    if time_since_activity > 300:  # 5 minutes
+                        incomplete.append(mapping_key)
+                        self.logger.warning("Found stuck init query thread (no activity)", 
+                                          mapping_key=mapping_key,
+                                          completion_reason=completion_reason,
+                                          is_running=is_running,
+                                          is_completed=is_completed,
+                                          time_since_activity=time_since_activity,
+                                          last_activity_time=last_activity)
             
             self.logger.info("Incomplete threads check completed", 
                            total_threads=len(self._threads),
