@@ -5,6 +5,7 @@ Handles individual target database operations in separate threads
 
 import threading
 import time
+import queue
 from typing import Dict, Any, Optional, List, Callable
 from queue import Queue, Empty
 
@@ -41,8 +42,8 @@ class TargetThread:
         self._shutdown_requested = False
         self._shutdown_lock = threading.Lock()
         
-        # Event processing queue
-        self._event_queue = Queue(maxsize=1000)
+        # Event processing queue - increased size to handle high throughput
+        self._event_queue = Queue(maxsize=10000)
         
         # Statistics
         self._stats = {
@@ -52,9 +53,12 @@ class TargetThread:
             'deletes_processed': 0,
             'init_query_events_processed': 0,
             'errors_count': 0,
+            'queue_overflow_count': 0,
             'last_event_time': None,
             'is_running': False,
-            'queue_size': 0
+            'queue_size': 0,
+            'max_queue_size': 0,
+            'queue_usage_percent': 0
         }
         self._stats_lock = threading.Lock()
         
@@ -125,7 +129,11 @@ class TargetThread:
         """Get thread statistics"""
         with self._stats_lock:
             stats = self._stats.copy()
-            stats['queue_size'] = self._event_queue.qsize()
+            current_queue_size = self._event_queue.qsize()
+            max_queue_size = self._event_queue.maxsize
+            stats['queue_size'] = current_queue_size
+            stats['max_queue_size'] = max_queue_size
+            stats['queue_usage_percent'] = (current_queue_size / max_queue_size * 100) if max_queue_size > 0 else 0
             return stats
     
     def _run(self) -> None:
@@ -137,16 +145,23 @@ class TargetThread:
             self.logger.info("Target thread started processing", target_name=self.target_name)
             
             # Process events from queue
+            last_stats_time = time.time()
             while not self._is_shutdown_requested():
                 try:
-                    # Get event from queue with timeout
-                    event = self._event_queue.get(timeout=1.0)
+                    # Get event from queue with shorter timeout for better responsiveness
+                    event = self._event_queue.get(timeout=0.1)
                     
                     # Process event
                     self._process_event(event)
                     
                     # Mark task as done
                     self._event_queue.task_done()
+                    
+                    # Log queue statistics every 30 seconds
+                    current_time = time.time()
+                    if current_time - last_stats_time > 30:
+                        self._log_queue_stats()
+                        last_stats_time = current_time
                     
                 except Empty:
                     # Timeout reached, continue to check shutdown
@@ -209,19 +224,46 @@ class TargetThread:
                                   message_source=message.source)
                 return
             
+            current_queue_size = self._event_queue.qsize()
+            max_queue_size = self._event_queue.maxsize
+            
             self.logger.debug("Adding binlog event to processing queue", 
                             target_name=self.target_name,
                             event_id=getattr(event, 'event_id', None),
                             schema=getattr(event, 'schema', None),
                             table=getattr(event, 'table', None),
-                            event_type=type(event).__name__)
+                            event_type=type(event).__name__,
+                            current_queue_size=current_queue_size,
+                            max_queue_size=max_queue_size,
+                            queue_usage_percent=(current_queue_size / max_queue_size * 100) if max_queue_size > 0 else 0)
             
-            # Add event to processing queue
-            self._event_queue.put_nowait(event)
+            # Check if queue is nearly full and warn
+            if current_queue_size > max_queue_size * 0.8:  # 80% full
+                self.logger.warning("Event queue is nearly full", 
+                                  target_name=self.target_name,
+                                  current_queue_size=current_queue_size,
+                                  max_queue_size=max_queue_size,
+                                  queue_usage_percent=(current_queue_size / max_queue_size * 100))
             
-            self.logger.debug("Binlog event added to queue successfully", 
-                            target_name=self.target_name,
-                            queue_size=self._event_queue.qsize())
+            # Add event to processing queue with overflow handling
+            try:
+                self._event_queue.put_nowait(event)
+                self.logger.debug("Binlog event added to queue successfully", 
+                                target_name=self.target_name,
+                                queue_size=self._event_queue.qsize())
+            except queue.Full:
+                self.logger.error("Event queue is full, dropping event", 
+                                target_name=self.target_name,
+                                event_id=getattr(event, 'event_id', None),
+                                schema=getattr(event, 'schema', None),
+                                table=getattr(event, 'table', None),
+                                event_type=type(event).__name__,
+                                queue_size=self._event_queue.qsize(),
+                                max_queue_size=max_queue_size)
+                with self._stats_lock:
+                    self._stats['errors_count'] += 1
+                    self._stats['queue_overflow_count'] += 1
+                return
             
         except Exception as e:
             import traceback
@@ -893,6 +935,28 @@ class TargetThread:
         """Check if shutdown is requested"""
         with self._shutdown_lock:
             return self._shutdown_requested
+    
+    def _log_queue_stats(self) -> None:
+        """Log queue statistics for monitoring"""
+        with self._stats_lock:
+            stats = self._stats.copy()
+        
+        current_queue_size = self._event_queue.qsize()
+        max_queue_size = self._event_queue.maxsize
+        queue_usage_percent = (current_queue_size / max_queue_size * 100) if max_queue_size > 0 else 0
+        
+        self.logger.info("Target thread queue statistics", 
+                        target_name=self.target_name,
+                        queue_size=current_queue_size,
+                        max_queue_size=max_queue_size,
+                        queue_usage_percent=queue_usage_percent,
+                        events_processed=stats['events_processed'],
+                        errors_count=stats['errors_count'],
+                        queue_overflow_count=stats['queue_overflow_count'],
+                        inserts_processed=stats['inserts_processed'],
+                        updates_processed=stats['updates_processed'],
+                        deletes_processed=stats['deletes_processed'],
+                        init_query_events_processed=stats['init_query_events_processed'])
     
     def _ensure_target_connection(self) -> bool:
         """Ensure target connection is available and reconnect if needed"""
