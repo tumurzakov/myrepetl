@@ -48,7 +48,9 @@ class InitQueryThread:
             'pages_processed': 0,
             'total_rows_estimated': -1,
             'current_offset': 0,
-            'queue_overflow_stops': 0
+            'queue_overflow_stops': 0,
+            'completion_reason': None,
+            'completion_error': None
         }
         self._stats_lock = threading.Lock()
         
@@ -137,6 +139,7 @@ class InitQueryThread:
                 self.logger.info("No init query configured, skipping", mapping_key=self.mapping_key)
                 with self._stats_lock:
                     self._stats['is_completed'] = True
+                    self._stats['completion_reason'] = 'no_init_query'
                 return
             
             # Get target information
@@ -157,6 +160,7 @@ class InitQueryThread:
                                        target_table=target_table_name)
                         with self._stats_lock:
                             self._stats['is_completed'] = True
+                            self._stats['completion_reason'] = 'table_not_empty'
                         return
                 except Exception as e:
                     self.logger.warning("Could not check if target table is empty, proceeding with init query", 
@@ -269,6 +273,9 @@ class InitQueryThread:
                             with self._stats_lock:
                                 self._stats['errors_count'] += 1
                                 self._stats['queue_overflow_stops'] += 1
+                                self._stats['is_completed'] = True
+                                self._stats['completion_reason'] = 'queue_overflow'
+                                self._stats['completion_error'] = f'Queue overflow: {current_queue_size}/{max_queue_size}'
                             
                             # Update metrics
                             if self.metrics_service:
@@ -288,7 +295,7 @@ class InitQueryThread:
                             # Mark as not completed so it can be resumed later
                             with self._stats_lock:
                                 self._stats['current_offset'] = offset + page_processed
-                                self._stats['is_completed'] = False
+                                self._stats['is_completed'] = False  # Override to False for resumption
                             
                             return  # Stop processing immediately
                     
@@ -320,6 +327,7 @@ class InitQueryThread:
                 if not self._is_shutdown_requested():
                     with self._stats_lock:
                         self._stats['is_completed'] = True
+                        self._stats['completion_reason'] = 'completed_successfully'
                     
                     self.logger.info("Init query processing completed", 
                                    mapping_key=self.mapping_key, 
@@ -329,6 +337,9 @@ class InitQueryThread:
             except Exception as e:
                 with self._stats_lock:
                     self._stats['errors_count'] += 1
+                    self._stats['is_completed'] = True
+                    self._stats['completion_reason'] = 'execution_error'
+                    self._stats['completion_error'] = str(e)
                 
                 # Update metrics
                 if self.metrics_service:
@@ -358,6 +369,9 @@ class InitQueryThread:
         except Exception as e:
             with self._stats_lock:
                 self._stats['errors_count'] += 1
+                self._stats['is_completed'] = True
+                self._stats['completion_reason'] = 'fatal_error'
+                self._stats['completion_error'] = str(e)
             
             # Update metrics
             if self.metrics_service:

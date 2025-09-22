@@ -551,6 +551,8 @@ class MetricsService:
                         "progress_percent": round((stat.get('rows_processed', 0) / max(stat.get('total_rows_estimated', 1), 1)) * 100, 2) if stat.get('total_rows_estimated', -1) > 0 else 0,
                         "errors_count": stat.get('errors_count', 0),
                         "queue_overflow_stops": stat.get('queue_overflow_stops', 0),
+                        "completion_reason": stat.get('completion_reason'),
+                        "completion_error": stat.get('completion_error'),
                         "last_activity_time": stat.get('last_activity_time')
                     })
                 
