@@ -439,8 +439,8 @@ class TestDatabaseService:
         service._connection_configs["test"] = mock_config
         
         with patch.object(service, 'is_connected', return_value=False):
-            with patch.object(service, 'close_connection'):
-                with patch.object(service, 'connect', return_value=mock_connection) as mock_connect:
+            with patch.object(service, '_close_connection_atomic'):
+                with patch.object(service, '_connect_atomic', return_value=mock_connection) as mock_connect:
                     result = service.reconnect_if_needed("test")
                     
                     assert result is True
