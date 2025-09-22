@@ -18,25 +18,13 @@ class DatabaseService:
     def __init__(self):
         self._connections: Dict[str, pymysql.Connection] = {}
         self._connection_configs: Dict[str, DatabaseConfig] = {}
-        # Thread-safe locks for atomic connection operations - one per connection
-        self._connection_locks: Dict[str, threading.RLock] = {}
-        # Global lock for managing connection locks themselves
-        self._locks_lock = threading.RLock()
+        # Note: Locks removed for maximum performance - each connection is isolated by unique name
         import structlog
         self.logger = structlog.get_logger()
     
-    def _get_connection_lock(self, connection_name: str) -> threading.RLock:
-        """Get or create a lock for a specific connection"""
-        with self._locks_lock:
-            if connection_name not in self._connection_locks:
-                self._connection_locks[connection_name] = threading.RLock()
-            return self._connection_locks[connection_name]
-    
     def connect(self, config: DatabaseConfig, connection_name: str = "default") -> pymysql.Connection:
         """Connect to database"""
-        connection_lock = self._get_connection_lock(connection_name)
-        with connection_lock:
-            return self._connect_atomic(config, connection_name)
+        return self._connect_atomic(config, connection_name)
     
     def _connect_atomic(self, config: DatabaseConfig, connection_name: str = "default") -> pymysql.Connection:
         """Atomically connect to database and store both connection and config"""
@@ -63,25 +51,23 @@ class DatabaseService:
     
     def get_connection(self, connection_name: str = "default") -> pymysql.Connection:
         """Get existing connection"""
-        connection_lock = self._get_connection_lock(connection_name)
-        with connection_lock:
-            if connection_name not in self._connections:
-                raise ConnectionError(f"Connection '{connection_name}' not found")
-            
-            connection = self._connections[connection_name]
-            if connection is None:
-                # Clean up None connection but keep config for reconnection
-                self._remove_connection_only_atomic(connection_name)
-                raise ConnectionError(f"Connection '{connection_name}' is None")
-            
-            # Check if connection is still valid
-            if not self.is_connected(connection_name):
-                self.logger.warning("Connection is no longer valid, removing from pool but keeping config", 
-                                  connection_name=connection_name)
-                self._remove_connection_only_atomic(connection_name)
-                raise ConnectionError(f"Connection '{connection_name}' is no longer valid")
-            
-            return connection
+        if connection_name not in self._connections:
+            raise ConnectionError(f"Connection '{connection_name}' not found")
+        
+        connection = self._connections[connection_name]
+        if connection is None:
+            # Clean up None connection but keep config for reconnection
+            self._remove_connection_only_atomic(connection_name)
+            raise ConnectionError(f"Connection '{connection_name}' is None")
+        
+        # Check if connection is still valid
+        if not self.is_connected(connection_name):
+            self.logger.warning("Connection is no longer valid, removing from pool but keeping config", 
+                              connection_name=connection_name)
+            self._remove_connection_only_atomic(connection_name)
+            raise ConnectionError(f"Connection '{connection_name}' is no longer valid")
+        
+        return connection
     
     @contextmanager
     def get_cursor(self, connection_name: str = "default"):
@@ -105,14 +91,12 @@ class DatabaseService:
                                   connection_name=connection_name)
                 # Force connection reset by removing it from pool atomically
                 # Keep configuration but remove connection to allow reconnection
-                connection_lock = self._get_connection_lock(connection_name)
-                with connection_lock:
-                    if connection_name in self._connections:
-                        try:
-                            self._connections[connection_name].close()
-                        except Exception:
-                            pass
-                    self._remove_connection_only_atomic(connection_name)
+                if connection_name in self._connections:
+                    try:
+                        self._connections[connection_name].close()
+                    except Exception:
+                        pass
+                self._remove_connection_only_atomic(connection_name)
             
             raise
         finally:
@@ -280,14 +264,12 @@ class DatabaseService:
                                       error_message=str(e))
                     # Mark connection as invalid so it gets recreated atomically
                     # Keep configuration but remove connection to allow reconnection
-                    connection_lock = self._get_connection_lock(connection_name)
-                    with connection_lock:
-                        if connection_name in self._connections:
-                            try:
-                                self._connections[connection_name].close()
-                            except Exception:
-                                pass
-                        self._remove_connection_only_atomic(connection_name)
+                    if connection_name in self._connections:
+                        try:
+                            self._connections[connection_name].close()
+                        except Exception:
+                            pass
+                    self._remove_connection_only_atomic(connection_name)
                 else:
                     self.logger.debug("MySQL connection error detected", 
                                     connection_name=connection_name, 
@@ -299,38 +281,34 @@ class DatabaseService:
     
     def reconnect_if_needed(self, connection_name: str) -> bool:
         """Reconnect if connection is lost"""
-        connection_lock = self._get_connection_lock(connection_name)
-        with connection_lock:
-            if not self.is_connected(connection_name):
-                if connection_name in self._connection_configs:
-                    config = self._connection_configs[connection_name]
-                    self.logger.info("Attempting to reconnect", connection_name=connection_name)
-                    try:
-                        # Close only the connection, keep the config for reconnection
-                        if connection_name in self._connections:
-                            try:
-                                self._connections[connection_name].close()
-                            except Exception:
-                                pass
-                        self._remove_connection_only_atomic(connection_name)
-                        
-                        # Now reconnect using the preserved config
-                        self._connect_atomic(config, connection_name)
-                        self.logger.info("Successfully reconnected", connection_name=connection_name)
-                        return True
-                    except Exception as e:
-                        self.logger.error("Failed to reconnect", connection_name=connection_name, error=str(e))
-                        return False
-                else:
-                    self.logger.error("No configuration found for reconnection", connection_name=connection_name)
+        if not self.is_connected(connection_name):
+            if connection_name in self._connection_configs:
+                config = self._connection_configs[connection_name]
+                self.logger.info("Attempting to reconnect", connection_name=connection_name)
+                try:
+                    # Close only the connection, keep the config for reconnection
+                    if connection_name in self._connections:
+                        try:
+                            self._connections[connection_name].close()
+                        except Exception:
+                            pass
+                    self._remove_connection_only_atomic(connection_name)
+                    
+                    # Now reconnect using the preserved config
+                    self._connect_atomic(config, connection_name)
+                    self.logger.info("Successfully reconnected", connection_name=connection_name)
+                    return True
+                except Exception as e:
+                    self.logger.error("Failed to reconnect", connection_name=connection_name, error=str(e))
                     return False
-            return True
+            else:
+                self.logger.error("No configuration found for reconnection", connection_name=connection_name)
+                return False
+        return True
     
     def close_connection(self, connection_name: str = "default") -> None:
         """Close database connection"""
-        connection_lock = self._get_connection_lock(connection_name)
-        with connection_lock:
-            self._close_connection_atomic(connection_name)
+        self._close_connection_atomic(connection_name)
     
     def _close_connection_atomic(self, connection_name: str = "default") -> None:
         """Atomically close database connection and remove both connection and config"""
