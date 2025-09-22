@@ -10,7 +10,7 @@ from queue import Queue, Empty
 
 from ..exceptions import ETLException
 from ..models.config import DatabaseConfig, ETLConfig
-from ..models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent
+from ..models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent, InitQueryEvent
 from .database_service import DatabaseService
 from .transform_service import TransformService
 from .filter_service import FilterService
@@ -50,6 +50,7 @@ class TargetThread:
             'inserts_processed': 0,
             'updates_processed': 0,
             'deletes_processed': 0,
+            'init_query_events_processed': 0,
             'errors_count': 0,
             'last_event_time': None,
             'is_running': False,
@@ -78,6 +79,10 @@ class TargetThread:
         self._message_bus_subscription = self._handle_binlog_event
         self.message_bus.subscribe(MessageType.BINLOG_EVENT, self._message_bus_subscription)
         
+        # Subscribe to init query events
+        self._init_query_subscription = self._handle_init_query_event
+        self.message_bus.subscribe(MessageType.INIT_QUERY_EVENT, self._init_query_subscription)
+        
         # Subscribe to shutdown messages
         self.message_bus.subscribe(MessageType.SHUTDOWN, self._handle_shutdown)
         
@@ -95,7 +100,9 @@ class TargetThread:
         # Unsubscribe from message bus
         if self._message_bus_subscription:
             self.message_bus.unsubscribe(MessageType.BINLOG_EVENT, self._message_bus_subscription)
-            self.message_bus.unsubscribe(MessageType.SHUTDOWN, self._handle_shutdown)
+        if self._init_query_subscription:
+            self.message_bus.unsubscribe(MessageType.INIT_QUERY_EVENT, self._init_query_subscription)
+        self.message_bus.unsubscribe(MessageType.SHUTDOWN, self._handle_shutdown)
         
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
@@ -179,6 +186,29 @@ class TargetThread:
             
         except Exception as e:
             self.logger.error("Error handling binlog event message", 
+                            target_name=self.target_name, error=str(e))
+            with self._stats_lock:
+                self._stats['errors_count'] += 1
+    
+    def _handle_init_query_event(self, message: Message) -> None:
+        """Handle init query event message from message bus"""
+        try:
+            if message.target and message.target != self.target_name:
+                # Event is targeted to a different target
+                return
+            
+            event_data = message.data
+            if not isinstance(event_data, InitQueryEvent):
+                self.logger.warning("Invalid init query event type in message", 
+                                  target_name=self.target_name,
+                                  event_type=type(event_data).__name__)
+                return
+            
+            # Process init query event directly (no queue needed for init queries)
+            self._process_init_query_event(event_data)
+            
+        except Exception as e:
+            self.logger.error("Error handling init query event message", 
                             target_name=self.target_name, error=str(e))
             with self._stats_lock:
                 self._stats['errors_count'] += 1
@@ -287,6 +317,72 @@ class TargetThread:
         # Fallback to schema.table format
         mapping_key = f"{schema}.{table}"
         return self.config.mapping.get(mapping_key)
+    
+    def _process_init_query_event(self, event: InitQueryEvent) -> None:
+        """Process init query event"""
+        import uuid
+        operation_id = str(uuid.uuid4())[:8]
+        
+        try:
+            self.logger.info("Processing init query event", 
+                            operation_id=operation_id,
+                            event_id=event.event_id,
+                            mapping_key=event.mapping_key,
+                            target_table=event.target_table)
+            
+            # Check target connection before processing
+            if not self._ensure_target_connection():
+                self.logger.warning("Target connection not available, skipping init query event", 
+                                  target_name=self.target_name,
+                                  mapping_key=event.mapping_key)
+                return
+            
+            # Apply filters if configured
+            if event.filter_config:
+                if not self.filter_service.apply_filter(event.row_data, event.filter_config):
+                    self.logger.debug("Init query row filtered out", 
+                                    mapping_key=event.mapping_key, 
+                                    row=event.row_data)
+                    return
+            
+            # Apply transformations
+            source_table = event.mapping_key  # mapping_key is already in format "source_name.table_name"
+            transformed_data = self.transform_service.apply_column_transforms(
+                event.row_data, event.column_mapping, source_table
+            )
+            
+            # Build and execute UPSERT
+            sql, values = SQLBuilder.build_upsert_sql(
+                event.target_table,
+                transformed_data,
+                event.primary_key
+            )
+            
+            # Execute the UPSERT
+            self.database_service.execute_update(sql, values, self.target_name)
+            
+            # Update statistics
+            with self._stats_lock:
+                self._stats['init_query_events_processed'] += 1
+                self._stats['last_event_time'] = time.time()
+            
+            self.logger.debug("Init query event processed successfully", 
+                            operation_id=operation_id,
+                            event_id=event.event_id,
+                            mapping_key=event.mapping_key,
+                            original=event.row_data, 
+                            transformed=transformed_data)
+            
+        except Exception as e:
+            with self._stats_lock:
+                self._stats['errors_count'] += 1
+            
+            self.logger.error("Error processing init query event", 
+                            operation_id=operation_id,
+                            event_id=event.event_id,
+                            mapping_key=event.mapping_key,
+                            error=str(e))
+            raise
     
     def _process_insert_event(self, event: InsertEvent, table_mapping, target_table_name: str) -> None:
         """Process INSERT event"""

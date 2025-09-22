@@ -12,6 +12,7 @@ from enum import Enum
 from .message_bus import MessageBus, MessageType, Message
 from .source_thread_service import SourceThreadService
 from .target_thread_service import TargetThreadService
+from .init_query_thread_service import InitQueryThreadService
 from .database_service import DatabaseService
 from .transform_service import TransformService
 from .filter_service import FilterService
@@ -35,11 +36,13 @@ class ServiceStats:
     uptime: float
     sources_count: int
     targets_count: int
+    init_query_threads_count: int
     total_events_processed: int
     total_errors: int
     message_bus_stats: Dict[str, Any]
     source_stats: Dict[str, Dict[str, Any]]
     target_stats: Dict[str, Dict[str, Any]]
+    init_query_stats: Dict[str, Dict[str, Any]]
 
 
 class ThreadManager:
@@ -61,6 +64,7 @@ class ThreadManager:
             self.message_bus, self.database_service, 
             self.transform_service, self.filter_service
         )
+        self.init_query_thread_service = InitQueryThreadService(self.message_bus, self.database_service)
         
         # State management
         self._status = ServiceStatus.STOPPED
@@ -110,6 +114,9 @@ class ThreadManager:
             # Start target threads first (they need to be ready to receive events)
             self._start_target_threads(config)
             
+            # Start init query threads (they run in parallel with replication)
+            self._start_init_query_threads(config)
+            
             # Start source threads
             self._start_source_threads(config)
             
@@ -135,6 +142,9 @@ class ThreadManager:
         try:
             # Stop source threads
             self.source_thread_service.stop_all_sources()
+            
+            # Stop init query threads
+            self.init_query_thread_service.stop_all_init_query_threads()
             
             # Stop target threads
             self.target_thread_service.stop_all_targets()
@@ -171,6 +181,12 @@ class ThreadManager:
                 self.source_thread_service.stop_all_sources()
             except Exception as e:
                 self.logger.error("Error stopping source threads", error=str(e))
+            
+            # Stop init query threads
+            try:
+                self.init_query_thread_service.stop_all_init_query_threads()
+            except Exception as e:
+                self.logger.error("Error stopping init query threads", error=str(e))
             
             # Stop target threads
             try:
@@ -229,18 +245,23 @@ class ThreadManager:
         
         source_stats = self.source_thread_service.get_all_stats()
         target_stats = self.target_thread_service.get_all_stats()
+        init_query_stats = self.init_query_thread_service.get_all_stats()
         
         # Calculate totals
         total_events_processed = sum(
             stats.get('events_processed', 0) for stats in source_stats.values()
         ) + sum(
             stats.get('events_processed', 0) for stats in target_stats.values()
+        ) + sum(
+            stats.get('rows_processed', 0) for stats in init_query_stats.values()
         )
         
         total_errors = sum(
             stats.get('errors_count', 0) for stats in source_stats.values()
         ) + sum(
             stats.get('errors_count', 0) for stats in target_stats.values()
+        ) + sum(
+            stats.get('errors_count', 0) for stats in init_query_stats.values()
         )
         
         return ServiceStats(
@@ -248,11 +269,13 @@ class ThreadManager:
             uptime=uptime,
             sources_count=len(source_stats),
             targets_count=len(target_stats),
+            init_query_threads_count=len(init_query_stats),
             total_events_processed=total_events_processed,
             total_errors=total_errors,
             message_bus_stats=self.message_bus.get_stats(),
             source_stats=source_stats,
-            target_stats=target_stats
+            target_stats=target_stats,
+            init_query_stats=init_query_stats
         )
     
     def is_running(self) -> bool:
@@ -358,6 +381,16 @@ class ThreadManager:
                 self.logger.error("Failed to start target thread", 
                                 target_name=target_name, error=str(e))
                 raise
+    
+    def _start_init_query_threads(self, config: ETLConfig) -> None:
+        """Start all init query threads"""
+        try:
+            self.logger.info("Starting init query threads")
+            self.init_query_thread_service.start_init_query_threads(config)
+            self.logger.info("All init query threads started successfully")
+        except Exception as e:
+            self.logger.error("Failed to start init query threads", error=str(e))
+            raise
     
     def _start_monitoring(self) -> None:
         """Start monitoring thread"""

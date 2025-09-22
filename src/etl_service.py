@@ -145,16 +145,13 @@ class ETLService:
             
             self.logger.info("Starting multithreaded replication process")
             
-            # Start all services and threads
+            # Start all services and threads (including init query threads)
             self.thread_manager.start(self.config, self.config_path)
             
             # Establish target connections for init queries
             self._establish_target_connections()
             
-            # Execute init queries for empty target tables
-            self.execute_init_queries()
-            
-            self.logger.info("Replication process started successfully")
+            self.logger.info("Replication process started successfully (init queries running in parallel)")
             
             # Wait for shutdown signal
             while not self._shutdown_requested and self.thread_manager.is_running():
@@ -164,7 +161,8 @@ class ETLService:
                     self.logger.debug("Service status", 
                                     status=stats.status.value,
                                     uptime=stats.uptime,
-                                    events_processed=stats.total_events_processed)
+                                    events_processed=stats.total_events_processed,
+                                    init_query_threads=stats.init_query_threads_count)
                     
                     # Sleep for a short time to avoid busy waiting
                     import time
@@ -184,7 +182,12 @@ class ETLService:
             self.cleanup()
     
     def execute_init_queries(self) -> None:
-        """Execute init queries for empty target tables"""
+        """Execute init queries for empty target tables
+        
+        DEPRECATED: This method is kept for backward compatibility.
+        Init queries are now executed in parallel threads via ThreadManager.
+        Use the new parallel init query system instead.
+        """
         try:
             if not self.thread_manager:
                 raise ETLException("Thread manager not initialized")

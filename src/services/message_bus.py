@@ -16,6 +16,7 @@ from ..models.events import BinlogEvent
 class MessageType(Enum):
     """Types of messages in the bus"""
     BINLOG_EVENT = "binlog_event"
+    INIT_QUERY_EVENT = "init_query_event"
     SHUTDOWN = "shutdown"
     ERROR = "error"
     HEARTBEAT = "heartbeat"
@@ -138,6 +139,16 @@ class MessageBus:
             source=source,
             target=target,
             data=event
+        )
+        return self.publish(message)
+    
+    def publish_init_query_event(self, source: str, event_data: Any, target: str = None) -> bool:
+        """Publish init query event message"""
+        message = Message(
+            message_type=MessageType.INIT_QUERY_EVENT,
+            source=source,
+            target=target,
+            data=event_data
         )
         return self.publish(message)
     
