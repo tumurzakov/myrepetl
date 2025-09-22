@@ -19,6 +19,8 @@ class TestTargetThread:
     def test_target_thread_initialization(self):
         """Test target thread initialization"""
         target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
@@ -47,6 +49,8 @@ class TestTargetThread:
     def test_start_stop_thread(self):
         """Test starting and stopping thread"""
         target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
         message_bus = Mock()
         database_service = Mock()
         transform_service = Mock()
