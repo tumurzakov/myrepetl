@@ -65,31 +65,6 @@ def print_health_summary(health_data: Dict[str, Any]):
         emoji = "✅" if status == "healthy" else "⚠️" if status == "warning" else "❌"
         print(f"  {emoji} {thread_type}: {count}/{total} running ({status})")
     print()
-    
-    # Database connections
-    db_conn = components["database_connections"]
-    print("🗄️  Database Connections:")
-    
-    sources = db_conn["sources"]
-    sources_emoji = "✅" if sources["status"] == "healthy" else "⚠️" if sources["status"] == "warning" else "❌"
-    print(f"  {sources_emoji} Sources: {sources['connected']}/{sources['total']} connected ({sources['status']})")
-    
-    targets = db_conn["targets"]
-    targets_emoji = "✅" if targets["status"] == "healthy" else "⚠️" if targets["status"] == "warning" else "❌"
-    print(f"  {targets_emoji} Targets: {targets['connected']}/{targets['total']} connected ({targets['status']})")
-    print()
-    
-    # Replication
-    replication = components["replication_connections"]
-    repl_emoji = "✅" if replication["status"] == "healthy" else "⚠️" if replication["status"] == "warning" else "❌"
-    print(f"🔄 Replication: {repl_emoji} {replication['connected']}/{replication['total']} connected ({replication['status']})")
-    print()
-    
-    # Message queue
-    queue = components["message_queue"]
-    queue_emoji = "✅" if queue["status"] == "healthy" else "⚠️" if queue["status"] == "warning" else "🚨" if queue["status"] == "critical" else "❌"
-    usage_percent = queue["usage_percent"]
-    print(f"📬 Message Queue: {queue_emoji} {queue['size']}/{queue['max_size']} ({usage_percent:.1f}% used) - {queue['status']}")
 
 def monitor_health(health_url: str, interval: int = 30):
     """Continuously monitor system health"""
