@@ -230,7 +230,8 @@ class TestETLService:
             mock_mapping.init_query = "SELECT * FROM users"
             mock_mapping.target_table = "users"  # New format: just table name
             mock_mapping.target = "target1"      # New format: target field
-            mock_mapping.source_table = "source1.users"
+            mock_mapping.source = "source1"      # New format: source field
+            mock_mapping.source_table = "users"  # New format: just table name
             mock_mapping.column_mapping = {"id": Mock(), "name": Mock()}
             mock_mapping.primary_key = "id"
             mock_mapping.filter = None

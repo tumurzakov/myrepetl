@@ -240,23 +240,13 @@ class ETLService:
                                target_table=table_mapping.target_table,
                                init_query=table_mapping.init_query)
                 
-                # Get source name from source_table field if available, otherwise from mapping key
-                if table_mapping.source_table:
-                    try:
-                        source_name, _ = self.config.parse_source_table(table_mapping.source_table)
-                    except Exception as e:
-                        self.logger.warning("Invalid source_table format, using mapping key", 
-                                          source_table=table_mapping.source_table, error=str(e))
-                        # Fallback to mapping key
-                        if '.' not in mapping_key:
-                            self.logger.warning("Invalid mapping key format, skipping init query", 
-                                              mapping_key=mapping_key)
-                            continue
-                        source_name = mapping_key.split('.')[0]
+                # Get source name from mapping.source field or mapping key
+                if table_mapping.source:
+                    source_name = table_mapping.source
                 else:
-                    # Fallback to mapping key (format: source_name.table_name)
+                    # Fallback to mapping key format (source_name.table_name)
                     if '.' not in mapping_key:
-                        self.logger.warning("Invalid mapping key format, skipping init query", 
+                        self.logger.warning("No source specified and invalid mapping key format, skipping init query", 
                                           mapping_key=mapping_key)
                         continue
                     source_name = mapping_key.split('.')[0]
@@ -297,7 +287,7 @@ class ETLService:
                                 continue
                         
                         # Apply transformations
-                        source_table = mapping_key  # mapping_key is already in format "source_name.table_name"
+                        source_table = mapping_key  # Use mapping key as source table identifier
                         transformed_data = transform_service.apply_column_transforms(
                             row_dict, table_mapping.column_mapping, source_table
                         )

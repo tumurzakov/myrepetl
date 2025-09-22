@@ -233,16 +233,6 @@ class ETLConfig:
             return f"{target_config.database}.{mapping.target_table}"
         return None
     
-    def parse_source_table(self, source_table: str) -> Tuple[str, str]:
-        """Parse source table string like 'source1.users' into (source_name, table_name)"""
-        if '.' not in source_table:
-            raise ConfigurationError(f"Source table must be in format 'source_name.table_name', got: {source_table}")
-        
-        source_name, table_name = source_table.split('.', 1)
-        if source_name not in self.sources:
-            raise ConfigurationError(f"Source '{source_name}' not found in configuration")
-        
-        return source_name, table_name
     
     def get_tables_for_source(self, source_name: str) -> List[Tuple[str, str]]:
         """Get list of (schema, table) tuples for a specific source"""
