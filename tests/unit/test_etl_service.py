@@ -25,6 +25,8 @@ class TestETLService:
             
             mock_config = Mock()
             mock_config.metrics_port = 8080
+            mock_config.sources = {'source1': Mock()}
+            mock_config.targets = {'target1': Mock()}
             mock_config_service.return_value.load_config.return_value = mock_config
             mock_config_service.return_value.validate_config.return_value = True
             
