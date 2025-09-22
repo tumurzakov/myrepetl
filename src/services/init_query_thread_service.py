@@ -464,11 +464,11 @@ class InitQueryThread:
         with self._stats_lock:
             self._stats['errors_count'] += 1
             self._stats['queue_overflow_stops'] += 1
-            self._stats['is_completed'] = True
+            # Don't mark as completed - this allows the thread to be resumed later
+            self._stats['is_completed'] = False
             self._stats['completion_reason'] = 'queue_overflow'
             self._stats['completion_error'] = 'Queue overflow detected'
             self._stats['current_offset'] = current_offset
-            self._stats['is_completed'] = False  # Override to False for resumption
         
         # Update metrics
         if self.metrics_service:
@@ -489,8 +489,13 @@ class InitQueryThread:
         """Handle execution errors during init query processing"""
         with self._stats_lock:
             self._stats['errors_count'] += 1
-            self._stats['is_completed'] = True
-            self._stats['completion_reason'] = 'execution_error'
+            # For connection errors, don't mark as completed to allow resumption
+            if isinstance(error, (ConnectionError, Exception)) and 'connection' in str(error).lower():
+                self._stats['is_completed'] = False
+                self._stats['completion_reason'] = 'execution_error'
+            else:
+                self._stats['is_completed'] = True
+                self._stats['completion_reason'] = 'execution_error'
             self._stats['completion_error'] = str(error)
         
         # Update metrics
@@ -786,8 +791,22 @@ class InitQueryThreadService:
         with self._threads_lock:
             incomplete = []
             for mapping_key, thread in self._threads.items():
+                # A thread is incomplete if it's not completed and not currently running
+                # This includes threads that were stopped due to queue overflow or other errors
                 if not thread.is_completed() and not thread.is_running():
-                    incomplete.append(mapping_key)
+                    # Get thread stats to check the completion reason
+                    stats = thread.get_stats()
+                    completion_reason = stats.get('completion_reason')
+                    
+                    # Only consider threads that were stopped due to recoverable conditions
+                    # Skip threads that completed successfully or had fatal errors
+                    if completion_reason in [None, 'queue_overflow', 'execution_error']:
+                        incomplete.append(mapping_key)
+                        self.logger.debug("Found incomplete init query thread", 
+                                        mapping_key=mapping_key,
+                                        completion_reason=completion_reason,
+                                        is_running=thread.is_running(),
+                                        is_completed=thread.is_completed())
             return incomplete
     
     def resume_init_query_thread(self, mapping_key: str, config: ETLConfig) -> bool:

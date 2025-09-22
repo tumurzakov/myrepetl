@@ -481,6 +481,18 @@ class ThreadManager:
             # Get incomplete threads
             incomplete_threads = self.init_query_thread_service.get_incomplete_threads()
             
+            # Log detailed thread status for debugging
+            all_stats = self.init_query_thread_service.get_all_stats()
+            running_count = self.init_query_thread_service.get_active_threads_count()
+            completed_count = self.init_query_thread_service.get_completed_threads_count()
+            
+            self.logger.debug("Init query threads status", 
+                            total_threads=len(all_stats),
+                            running_count=running_count,
+                            completed_count=completed_count,
+                            incomplete_count=len(incomplete_threads),
+                            incomplete_threads=incomplete_threads)
+            
             if incomplete_threads:
                 self.logger.info("Found incomplete init query threads, attempting to resume", 
                                incomplete_count=len(incomplete_threads),
