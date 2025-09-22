@@ -72,7 +72,8 @@ class TestFullPipeline:
     def test_etl_service_initialization(self, sample_config):
         """Test ETL service initialization with real config"""
         with patch('src.etl_service.ConfigService') as mock_config_service, \
-             patch('src.etl_service.ThreadManager') as mock_thread_manager:
+             patch('src.etl_service.ThreadManager') as mock_thread_manager, \
+             patch('src.etl_service.MetricsEndpoint') as mock_metrics_endpoint:
             
             # Mock config service to return real config
             mock_config_service.return_value.load_config.return_value = ETLConfig.from_dict({
@@ -106,7 +107,8 @@ class TestFullPipeline:
                             "name": {"column": "name"}
                         }
                     }
-                }
+                },
+                "metrics_port": 8081
             })
             mock_config_service.return_value.validate_config.return_value = True
             

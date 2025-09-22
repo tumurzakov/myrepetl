@@ -14,6 +14,8 @@ from .models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent
 from .services import ConfigService, DatabaseService, TransformService, ReplicationService, FilterService
 from .services.thread_manager import ThreadManager
 from .services.message_bus import MessageBus
+from .services.metrics_service import MetricsService
+from .services.metrics_endpoint import MetricsEndpoint
 from .utils import SQLBuilder, retry_on_connection_error, retry_on_transform_error
 
 
@@ -28,11 +30,17 @@ class ETLService:
         self.config_path: Optional[str] = None
         self._shutdown_requested = False
         
+        # Initialize metrics service first
+        self.metrics_service = MetricsService()
+        
         # Core services for dependency injection
-        self.message_bus = MessageBus(max_queue_size=50000)
-        self.database_service = DatabaseService()
+        self.message_bus = MessageBus(max_queue_size=50000, metrics_service=self.metrics_service)
+        self.database_service = DatabaseService(metrics_service=self.metrics_service)
         self.transform_service = TransformService()
         self.filter_service = FilterService()
+        
+        # Metrics endpoint
+        self.metrics_endpoint: Optional[MetricsEndpoint] = None
         
         # Setup signal handlers for graceful shutdown
         self._setup_signal_handlers()
@@ -50,6 +58,12 @@ class ETLService:
         """Запрос на остановку сервиса"""
         self.logger.info("Shutdown requested")
         self._shutdown_requested = True
+        
+        # Stop metrics endpoint
+        if self.metrics_endpoint:
+            self.metrics_endpoint.stop()
+        
+        # Stop thread manager
         if self.thread_manager:
             self.thread_manager.stop()
     
@@ -71,10 +85,22 @@ class ETLService:
                 message_bus=self.message_bus,
                 database_service=self.database_service,
                 transform_service=self.transform_service,
-                filter_service=self.filter_service
+                filter_service=self.filter_service,
+                metrics_service=self.metrics_service
             )
             
-            self.logger.info("ETL service initialized", config_path=config_path)
+            # Initialize metrics endpoint
+            metrics_port = getattr(self.config, 'metrics_port', 8080)
+            self.metrics_endpoint = MetricsEndpoint(
+                metrics_service=self.metrics_service,
+                port=metrics_port
+            )
+            self.metrics_endpoint.start()
+            
+            self.logger.info("ETL service initialized", 
+                           config_path=config_path,
+                           metrics_url=self.metrics_endpoint.get_url(),
+                           health_url=self.metrics_endpoint.get_health_url())
             
         except Exception as e:
             self.logger.error("Failed to initialize ETL service", error=str(e))

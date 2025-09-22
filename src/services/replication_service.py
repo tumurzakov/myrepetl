@@ -12,13 +12,15 @@ from ..exceptions import ReplicationError
 from ..models.config import DatabaseConfig, ReplicationConfig, ETLConfig
 from ..models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent, EventType
 from .database_service import DatabaseService
+from .metrics_service import MetricsService
 
 
 class ReplicationService:
     """Service for MySQL replication operations"""
     
-    def __init__(self, database_service: DatabaseService):
+    def __init__(self, database_service: DatabaseService, metrics_service: Optional[MetricsService] = None):
         self.database_service = database_service
+        self.metrics_service = metrics_service
         self._streams: Dict[str, BinLogStreamReader] = {}
         self._shutdown_requested = False
     
@@ -94,6 +96,11 @@ class ReplicationService:
                        log_pos=master_status.get('position', replication_config.log_pos))
             
             self._streams[source_name] = stream
+            
+            # Update metrics
+            if self.metrics_service:
+                self.metrics_service.set_replication_connection_status(source_name, True)
+            
             return stream
             
         except Exception as e:
@@ -110,7 +117,17 @@ class ReplicationService:
                 # Проверяем флаг остановки перед каждым событием
                 if self._shutdown_requested:
                     break
-                yield self._convert_binlog_event(binlog_event, source_name)
+                
+                # Convert and yield event
+                converted_event = self._convert_binlog_event(binlog_event, source_name)
+                
+                # Update metrics
+                if self.metrics_service:
+                    event_type = converted_event.event_type.value if hasattr(converted_event.event_type, 'value') else str(converted_event.event_type)
+                    self.metrics_service.record_replication_record_received(source_name, event_type)
+                    self.metrics_service.record_replication_event_by_type(source_name, event_type)
+                
+                yield converted_event
         except Exception as e:
             if self._shutdown_requested:
                 # Если остановка запрошена, не поднимаем исключение
@@ -147,7 +164,17 @@ class ReplicationService:
                                    source_name=source_name,
                                    event_type=type(binlog_event).__name__,
                                    event_count=event_count)
-                        yield source_name, self._convert_binlog_event(binlog_event, source_name)
+                        
+                        # Convert event
+                        converted_event = self._convert_binlog_event(binlog_event, source_name)
+                        
+                        # Update metrics
+                        if self.metrics_service:
+                            event_type = converted_event.event_type.value if hasattr(converted_event.event_type, 'value') else str(converted_event.event_type)
+                            self.metrics_service.record_replication_record_received(source_name, event_type)
+                            self.metrics_service.record_replication_event_by_type(source_name, event_type)
+                        
+                        yield source_name, converted_event
 
                 except Exception as e:
                     if "no more data" in str(e).lower() or "no data" in str(e).lower():
@@ -254,6 +281,10 @@ class ReplicationService:
                 except Exception:
                     pass
                 finally:
+                    # Update metrics
+                    if self.metrics_service:
+                        self.metrics_service.set_replication_connection_status(source_name, False)
+                    
                     del self._streams[source_name]
         else:
             # Close all streams
@@ -270,4 +301,10 @@ class ReplicationService:
                             pass
                 except Exception:
                     pass
+            
+            # Update metrics for all closed streams
+            if self.metrics_service:
+                for stream_name in list(self._streams.keys()):
+                    self.metrics_service.set_replication_connection_status(stream_name, False)
+            
             self._streams.clear()

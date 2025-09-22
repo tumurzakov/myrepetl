@@ -11,6 +11,7 @@ from enum import Enum
 import structlog
 
 from ..models.events import BinlogEvent
+from .metrics_service import MetricsService
 
 
 class MessageType(Enum):
@@ -43,9 +44,10 @@ class Message:
 class MessageBus:
     """Thread-safe message bus for inter-thread communication"""
     
-    def __init__(self, max_queue_size: int = 10000):
+    def __init__(self, max_queue_size: int = 10000, metrics_service: Optional[MetricsService] = None):
         self.logger = structlog.get_logger()
         self.max_queue_size = max_queue_size
+        self.metrics_service = metrics_service
         
         # Main message queue
         self._message_queue = queue.Queue(maxsize=max_queue_size)
@@ -116,6 +118,13 @@ class MessageBus:
             with self._stats_lock:
                 self._stats['messages_sent'] += 1
             
+            # Update metrics
+            if self.metrics_service:
+                self.metrics_service.set_message_queue_size(self._message_queue.qsize())
+                self.metrics_service.set_message_queue_max_size(self.max_queue_size)
+                usage_percent = (self._message_queue.qsize() / self.max_queue_size) * 100
+                self.metrics_service.set_message_queue_usage_percent(usage_percent)
+            
             self.logger.debug("Message published", 
                              message_type=message.message_type.value,
                              source=message.source,
@@ -125,6 +134,14 @@ class MessageBus:
         except queue.Full:
             with self._stats_lock:
                 self._stats['messages_dropped'] += 1
+            
+            # Update metrics
+            if self.metrics_service:
+                self.metrics_service.record_message_queue_overflow()
+                self.metrics_service.set_message_queue_size(self._message_queue.qsize())
+                self.metrics_service.set_message_queue_max_size(self.max_queue_size)
+                usage_percent = (self._message_queue.qsize() / self.max_queue_size) * 100
+                self.metrics_service.set_message_queue_usage_percent(usage_percent)
             
             self.logger.warning("Message queue is full, dropping message", 
                                message_type=message.message_type.value,
@@ -316,7 +333,16 @@ class MessageBus:
     
     def get_queue_size(self) -> int:
         """Get current queue size"""
-        return self._message_queue.qsize()
+        size = self._message_queue.qsize()
+        
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.set_message_queue_size(size)
+            self.metrics_service.set_message_queue_max_size(self.max_queue_size)
+            usage_percent = (size / self.max_queue_size) * 100
+            self.metrics_service.set_message_queue_usage_percent(usage_percent)
+        
+        return size
     
     def is_empty(self) -> bool:
         """Check if message queue is empty"""

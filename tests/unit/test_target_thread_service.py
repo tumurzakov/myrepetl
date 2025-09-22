@@ -272,7 +272,8 @@ class TestTargetThreadService:
                 database_service=database_service,
                 transform_service=transform_service,
                 filter_service=filter_service,
-                config=config
+                config=config,
+                metrics_service=None
             )
             mock_thread.start.assert_called_once()
     

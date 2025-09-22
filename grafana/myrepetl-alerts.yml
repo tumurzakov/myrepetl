@@ -1,0 +1,136 @@
+# MyRepETL Prometheus Alert Rules
+
+groups:
+  - name: myrepetl.rules
+    rules:
+      # Critical queue usage
+      - alert: MyRepETLQueueCritical
+        expr: myrepetl_message_queue_usage_percent > 90
+        for: 1m
+        labels:
+          severity: critical
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL message queue usage is critical"
+          description: "Message queue usage is {{ $value }}% for more than 1 minute"
+
+      # High queue usage
+      - alert: MyRepETLQueueHigh
+        expr: myrepetl_message_queue_usage_percent > 70
+        for: 5m
+        labels:
+          severity: warning
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL message queue usage is high"
+          description: "Message queue usage is {{ $value }}% for more than 5 minutes"
+
+      # Database connection lost
+      - alert: MyRepETLDatabaseConnectionLost
+        expr: myrepetl_database_connection_status == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL database connection lost"
+          description: "Database connection {{ $labels.connection_name }} ({{ $labels.connection_type }}) is down"
+
+      # Replication connection lost
+      - alert: MyRepETLReplicationConnectionLost
+        expr: myrepetl_replication_connection_status == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL replication connection lost"
+          description: "Replication connection to {{ $labels.source_name }} is down"
+
+      # All init threads stopped
+      - alert: MyRepETLInitThreadsStopped
+        expr: sum(myrepetl_init_thread_status) == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: myrepetl
+        annotations:
+          summary: "All MyRepETL init threads are stopped"
+          description: "No init query threads are running"
+
+      # All target threads stopped
+      - alert: MyRepETLTargetThreadsStopped
+        expr: sum(myrepetl_target_thread_status) == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: myrepetl
+        annotations:
+          summary: "All MyRepETL target threads are stopped"
+          description: "No target processing threads are running"
+
+      # High error rate
+      - alert: MyRepETLHighErrorRate
+        expr: rate(myrepetl_errors_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL high error rate"
+          description: "Error rate is {{ $value }} errors/second for {{ $labels.error_type }} in {{ $labels.component }}"
+
+      # High reconnection rate
+      - alert: MyRepETLHighReconnectionRate
+        expr: rate(myrepetl_database_reconnections_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL high database reconnection rate"
+          description: "Database reconnection rate is {{ $value }} reconnections/second for {{ $labels.connection_name }}"
+
+      # High processing latency
+      - alert: MyRepETLHighProcessingLatency
+        expr: histogram_quantile(0.95, rate(myrepetl_processing_latency_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL high processing latency"
+          description: "95th percentile processing latency is {{ $value }} seconds"
+
+      # No records processed
+      - alert: MyRepETLNoRecordsProcessed
+        expr: rate(myrepetl_init_records_sent_total[10m]) == 0 and rate(myrepetl_target_records_received_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL no records processed"
+          description: "No records have been processed in the last 10 minutes"
+
+      # Health check failed
+      - alert: MyRepETLHealthCheckFailed
+        expr: up{job="myrepetl-health"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL health check failed"
+          description: "Health check endpoint is not responding"
+
+      # System uptime low (restarted recently)
+      - alert: MyRepETLRecentlyRestarted
+        expr: myrepetl_system_uptime_seconds < 300
+        for: 0m
+        labels:
+          severity: info
+          service: myrepetl
+        annotations:
+          summary: "MyRepETL recently restarted"
+          description: "System uptime is {{ $value }} seconds (less than 5 minutes)"

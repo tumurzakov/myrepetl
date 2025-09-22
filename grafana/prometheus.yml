@@ -1,0 +1,47 @@
+# Prometheus configuration for MyRepETL monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "myrepetl-alerts.yml"
+
+scrape_configs:
+  # MyRepETL metrics
+  - job_name: 'myrepetl'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # MyRepETL health check
+  - job_name: 'myrepetl-health'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/health'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    # Convert health check to up/down metric
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        target_label: __name__
+        regex: '.*'
+        replacement: 'up'
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: job
+        replacement: 'myrepetl-health'
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Alerting configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           # - alertmanager:9093

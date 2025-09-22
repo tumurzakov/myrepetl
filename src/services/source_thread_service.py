@@ -15,6 +15,7 @@ from ..models.config import DatabaseConfig, ReplicationConfig, ETLConfig
 from ..models.events import BinlogEvent, InsertEvent, UpdateEvent, DeleteEvent, EventType
 from .database_service import DatabaseService
 from .message_bus import MessageBus, MessageType, Message
+from .metrics_service import MetricsService
 import structlog
 
 
@@ -23,13 +24,15 @@ class SourceThread:
     
     def __init__(self, source_name: str, source_config: DatabaseConfig, 
                  replication_config: ReplicationConfig, tables: List[Tuple[str, str]],
-                 message_bus: MessageBus, database_service: DatabaseService):
+                 message_bus: MessageBus, database_service: DatabaseService,
+                 metrics_service: Optional[MetricsService] = None):
         self.source_name = source_name
         self.source_config = source_config
         self.replication_config = replication_config
         self.tables = tables
         self.message_bus = message_bus
         self.database_service = database_service
+        self.metrics_service = metrics_service
         
         self.logger = structlog.get_logger()
         
@@ -569,9 +572,11 @@ class SourceThread:
 class SourceThreadService:
     """Service for managing source threads"""
     
-    def __init__(self, message_bus: MessageBus, database_service: DatabaseService):
+    def __init__(self, message_bus: MessageBus, database_service: DatabaseService, 
+                 metrics_service: Optional[MetricsService] = None):
         self.message_bus = message_bus
         self.database_service = database_service
+        self.metrics_service = metrics_service
         self.logger = structlog.get_logger()
         
         # Thread management
@@ -598,7 +603,8 @@ class SourceThreadService:
                 replication_config=replication_config,
                 tables=tables,
                 message_bus=self.message_bus,
-                database_service=self.database_service
+                database_service=self.database_service,
+                metrics_service=self.metrics_service
             )
             
             self._source_threads[source_name] = source_thread

@@ -183,7 +183,8 @@ class TestSourceThreadService:
                 replication_config=replication_config,
                 tables=tables,
                 message_bus=message_bus,
-                database_service=database_service
+                database_service=database_service,
+                metrics_service=None
             )
             mock_thread.start.assert_called_once()
     

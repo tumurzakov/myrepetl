@@ -1,0 +1,51 @@
+{
+  "sources": {
+    "source1": {
+      "host": "localhost",
+      "port": 3306,
+      "user": "source_user",
+      "password": "source_password",
+      "database": "source_db"
+    }
+  },
+  "targets": {
+    "target1": {
+      "host": "localhost",
+      "port": 3306,
+      "user": "target_user",
+      "password": "target_password",
+      "database": "target_db"
+    }
+  },
+  "replication": {
+    "server_id": 100
+  },
+  "mapping": {
+    "source1.users": {
+      "target_table": "target1.users",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "name": {"column": "name"},
+        "email": {"column": "email"},
+        "created_at": {"column": "created_at"}
+      }
+    },
+    "source1.orders": {
+      "target_table": "target1.orders",
+      "primary_key": "id",
+      "column_mapping": {
+        "id": {"column": "id", "primary_key": true},
+        "user_id": {"column": "user_id"},
+        "amount": {"column": "amount"},
+        "status": {"column": "status"},
+        "created_at": {"column": "created_at"}
+      }
+    }
+  },
+  "metrics_port": 8080,
+  "batch_size": 1000,
+  "batch_timeout": 5,
+  "init_batch_size": 5000,
+  "init_batch_timeout": 10
+}

@@ -16,6 +16,7 @@ from .init_query_thread_service import InitQueryThreadService
 from .database_service import DatabaseService
 from .transform_service import TransformService
 from .filter_service import FilterService
+from .metrics_service import MetricsService
 from ..models.config import ETLConfig
 import structlog
 
@@ -49,7 +50,8 @@ class ThreadManager:
     """Manages all threads and their lifecycle"""
     
     def __init__(self, message_bus: MessageBus, database_service: DatabaseService, 
-                 transform_service: TransformService, filter_service: FilterService):
+                 transform_service: TransformService, filter_service: FilterService,
+                 metrics_service: Optional[MetricsService] = None):
         self.logger = structlog.get_logger()
         
         # Core services (injected dependencies)
@@ -57,14 +59,15 @@ class ThreadManager:
         self.database_service = database_service
         self.transform_service = transform_service
         self.filter_service = filter_service
+        self.metrics_service = metrics_service
         
         # Thread services
-        self.source_thread_service = SourceThreadService(self.message_bus, self.database_service)
+        self.source_thread_service = SourceThreadService(self.message_bus, self.database_service, self.metrics_service)
         self.target_thread_service = TargetThreadService(
             self.message_bus, self.database_service, 
-            self.transform_service, self.filter_service
+            self.transform_service, self.filter_service, self.metrics_service
         )
-        self.init_query_thread_service = InitQueryThreadService(self.message_bus, self.database_service)
+        self.init_query_thread_service = InitQueryThreadService(self.message_bus, self.database_service, self.metrics_service)
         
         # State management
         self._status = ServiceStatus.STOPPED

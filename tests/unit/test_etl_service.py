@@ -20,9 +20,11 @@ class TestETLService:
     def test_initialize_success(self):
         """Test successful ETL service initialization"""
         with patch('src.etl_service.ConfigService') as mock_config_service, \
-             patch('src.etl_service.ThreadManager') as mock_thread_manager:
+             patch('src.etl_service.ThreadManager') as mock_thread_manager, \
+             patch('src.etl_service.MetricsEndpoint') as mock_metrics_endpoint:
             
             mock_config = Mock()
+            mock_config.metrics_port = 8080
             mock_config_service.return_value.load_config.return_value = mock_config
             mock_config_service.return_value.validate_config.return_value = True
             
@@ -34,6 +36,7 @@ class TestETLService:
             mock_config_service.return_value.load_config.assert_called_once_with("config.json")
             mock_config_service.return_value.validate_config.assert_called_once_with(mock_config)
             mock_thread_manager.assert_called_once()
+            mock_metrics_endpoint.assert_called_once()
     
     def test_initialize_invalid_config(self):
         """Test ETL service initialization with invalid config"""

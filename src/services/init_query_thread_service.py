@@ -13,6 +13,7 @@ from ..models.config import DatabaseConfig, ETLConfig
 from ..models.events import InitQueryEvent
 from .database_service import DatabaseService
 from .message_bus import MessageBus, MessageType, Message
+from .metrics_service import MetricsService
 import structlog
 
 
@@ -21,13 +22,14 @@ class InitQueryThread:
     
     def __init__(self, mapping_key: str, source_name: str, target_name: str,
                  message_bus: MessageBus, database_service: DatabaseService,
-                 config: ETLConfig):
+                 config: ETLConfig, metrics_service: Optional[MetricsService] = None):
         self.mapping_key = mapping_key
         self.source_name = source_name
         self.target_name = target_name
         self.message_bus = message_bus
         self.database_service = database_service
         self.config = config
+        self.metrics_service = metrics_service
         
         self.logger = structlog.get_logger()
         
@@ -71,6 +73,12 @@ class InitQueryThread:
         self._thread.daemon = True
         self._thread.start()
         
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.set_init_thread_status(
+                self.mapping_key, self.source_name, self.target_name, True
+            )
+        
         self.logger.info("Init query thread started", mapping_key=self.mapping_key)
     
     def stop(self) -> None:
@@ -87,6 +95,12 @@ class InitQueryThread:
         
         with self._stats_lock:
             self._stats['is_running'] = False
+        
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.set_init_thread_status(
+                self.mapping_key, self.source_name, self.target_name, False
+            )
         
         self.logger.info("Init query thread stopped", mapping_key=self.mapping_key)
     
@@ -242,11 +256,26 @@ class InitQueryThread:
                             with self._stats_lock:
                                 self._stats['rows_processed'] += 1
                                 self._stats['last_activity_time'] = time.time()
+                            
+                            # Update metrics
+                            if self.metrics_service:
+                                # Extract table name from mapping key
+                                table_name = self.mapping_key.split('.')[-1] if '.' in self.mapping_key else self.mapping_key
+                                self.metrics_service.record_init_record_sent(
+                                    self.source_name, table_name, self.mapping_key
+                                )
                         else:
                             # Queue overflow - stop processing to prevent data loss
                             with self._stats_lock:
                                 self._stats['errors_count'] += 1
                                 self._stats['queue_overflow_stops'] += 1
+                            
+                            # Update metrics
+                            if self.metrics_service:
+                                self.metrics_service.record_error(
+                                    "queue_overflow", "init_query_thread", 
+                                    self.source_name, self.target_name
+                                )
                             
                             self.logger.error("Queue overflow detected, stopping init query processing to prevent data loss", 
                                             mapping_key=self.mapping_key,
@@ -267,6 +296,13 @@ class InitQueryThread:
                     with self._stats_lock:
                         self._stats['pages_processed'] += 1
                         self._stats['current_offset'] = offset + len(results)
+                    
+                    # Update metrics for batch size
+                    if self.metrics_service and results:
+                        table_name = self.mapping_key.split('.')[-1] if '.' in self.mapping_key else self.mapping_key
+                        self.metrics_service.record_init_batch_size(
+                            self.source_name, table_name, len(results)
+                        )
                     
                     offset += page_size
                     
@@ -294,6 +330,13 @@ class InitQueryThread:
                 with self._stats_lock:
                     self._stats['errors_count'] += 1
                 
+                # Update metrics
+                if self.metrics_service:
+                    self.metrics_service.record_error(
+                        "init_query_execution", "init_query_thread", 
+                        self.source_name, self.target_name
+                    )
+                
                 self.logger.error("Error executing init query", 
                                 mapping_key=self.mapping_key, 
                                 error=str(e))
@@ -315,6 +358,13 @@ class InitQueryThread:
         except Exception as e:
             with self._stats_lock:
                 self._stats['errors_count'] += 1
+            
+            # Update metrics
+            if self.metrics_service:
+                self.metrics_service.record_error(
+                    "fatal_error", "init_query_thread", 
+                    self.source_name, self.target_name
+                )
             
             self.logger.error("Fatal error in init query thread", 
                             mapping_key=self.mapping_key, 
@@ -391,10 +441,12 @@ class InitQueryThread:
 class InitQueryThreadService:
     """Service for managing init query threads"""
     
-    def __init__(self, message_bus: MessageBus, database_service: DatabaseService):
+    def __init__(self, message_bus: MessageBus, database_service: DatabaseService, 
+                 metrics_service: Optional[MetricsService] = None):
         self.logger = structlog.get_logger()
         self.message_bus = message_bus
         self.database_service = database_service
+        self.metrics_service = metrics_service
         
         # Thread management
         self._threads: Dict[str, InitQueryThread] = {}
@@ -452,7 +504,8 @@ class InitQueryThreadService:
                         target_name=target_name,
                         message_bus=self.message_bus,
                         database_service=self.database_service,
-                        config=config
+                        config=config,
+                        metrics_service=self.metrics_service
                     )
                     
                     self._threads[mapping_key] = thread

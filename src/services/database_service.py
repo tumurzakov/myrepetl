@@ -5,19 +5,22 @@ Database service for MySQL Replication ETL
 import pymysql
 import pymysql.err
 import threading
+import time
 from typing import Dict, Any, Optional, Tuple
 from contextlib import contextmanager
 
 from ..exceptions import ConnectionError
 from ..models.config import DatabaseConfig
+from .metrics_service import MetricsService
 
 
 class DatabaseService:
     """Service for database operations"""
     
-    def __init__(self):
+    def __init__(self, metrics_service: Optional[MetricsService] = None):
         self._connections: Dict[str, pymysql.Connection] = {}
         self._connection_configs: Dict[str, DatabaseConfig] = {}
+        self.metrics_service = metrics_service
         # Note: Locks removed for maximum performance - each connection is isolated by unique name
         import structlog
         self.logger = structlog.get_logger()
@@ -45,6 +48,14 @@ class DatabaseService:
             # Atomically store both connection and config
             self._connections[connection_name] = connection
             self._connection_configs[connection_name] = config
+            
+            # Update metrics
+            if self.metrics_service:
+                # Determine connection type based on connection name
+                connection_type = "source" if "source" in connection_name else "target"
+                self.metrics_service.set_database_connection_status(connection_name, connection_type, True)
+                self.metrics_service.set_database_last_activity(connection_name, connection_type, time.time())
+            
             return connection
         except Exception as e:
             raise ConnectionError(f"Failed to connect to database: {e}")
@@ -296,6 +307,12 @@ class DatabaseService:
                     
                     # Now reconnect using the preserved config
                     self._connect_atomic(config, connection_name)
+                    
+                    # Update metrics
+                    if self.metrics_service:
+                        connection_type = "source" if "source" in connection_name else "target"
+                        self.metrics_service.record_database_reconnection(connection_name, connection_type)
+                    
                     self.logger.info("Successfully reconnected", connection_name=connection_name)
                     return True
                 except Exception as e:
@@ -353,6 +370,11 @@ class DatabaseService:
             self.logger.warning("Unexpected error closing connection", 
                               connection_name=connection_name, error=str(e))
         finally:
+            # Update metrics before removing connection
+            if self.metrics_service:
+                connection_type = "source" if "source" in connection_name else "target"
+                self.metrics_service.set_database_connection_status(connection_name, connection_type, False)
+            
             # Atomically remove both connection and config
             self._remove_connection_atomic(connection_name)
     

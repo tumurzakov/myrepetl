@@ -16,6 +16,7 @@ from .database_service import DatabaseService
 from .transform_service import TransformService
 from .filter_service import FilterService
 from .message_bus import MessageBus, MessageType, Message
+from .metrics_service import MetricsService
 from ..utils import SQLBuilder
 import structlog
 
@@ -26,7 +27,7 @@ class TargetThread:
     def __init__(self, target_name: str, target_config: DatabaseConfig,
                  message_bus: MessageBus, database_service: DatabaseService,
                  transform_service: TransformService, filter_service: FilterService,
-                 config: ETLConfig):
+                 config: ETLConfig, metrics_service: Optional[MetricsService] = None):
         self.target_name = target_name
         self.target_config = target_config
         self.message_bus = message_bus
@@ -34,6 +35,7 @@ class TargetThread:
         self.transform_service = transform_service
         self.filter_service = filter_service
         self.config = config
+        self.metrics_service = metrics_service
         
         self.logger = structlog.get_logger()
         
@@ -110,6 +112,10 @@ class TargetThread:
         self._thread.daemon = True
         self._thread.start()
         
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.set_target_thread_status(self.target_name, True)
+        
         self.logger.info("Target thread started", target_name=self.target_name)
     
     def stop(self) -> None:
@@ -148,6 +154,10 @@ class TargetThread:
         with self._stats_lock:
             self._stats['is_running'] = False
         
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.set_target_thread_status(self.target_name, False)
+        
         self.logger.info("Target thread stopped", target_name=self.target_name)
     
     def is_running(self) -> bool:
@@ -164,6 +174,11 @@ class TargetThread:
             stats['queue_size'] = current_queue_size
             stats['max_queue_size'] = max_queue_size
             stats['queue_usage_percent'] = (current_queue_size / max_queue_size * 100) if max_queue_size > 0 else 0
+            
+            # Update metrics
+            if self.metrics_service:
+                self.metrics_service.set_target_queue_size(self.target_name, current_queue_size)
+            
             return stats
     
     def _run(self) -> None:
@@ -352,6 +367,13 @@ class TargetThread:
                 with self._stats_lock:
                     self._stats['errors_count'] += 1
                     self._stats['queue_overflow_count'] += 1
+                
+                # Update metrics
+                if self.metrics_service:
+                    self.metrics_service.record_error(
+                        "queue_overflow", "target_thread", "", self.target_name
+                    )
+                
                 return
             
         except Exception as e:
@@ -512,6 +534,11 @@ class TargetThread:
             with self._stats_lock:
                 self._stats['events_processed'] += 1
                 self._stats['last_event_time'] = time.time()
+            
+            # Update metrics
+            if self.metrics_service:
+                event_type = type(event).__name__.lower().replace('event', '')
+                self.metrics_service.record_target_record_received(self.target_name, event_type)
                 
         except Exception as e:
             self.logger.warning("Error processing event (ignoring, will retry later)", 
@@ -1286,6 +1313,23 @@ class TargetThread:
                 self._stats['events_processed'] += len(events)
                 self._stats['last_event_time'] = time.time()
             
+            # Update metrics
+            if self.metrics_service:
+                # Parse table key to get table name
+                parts = table_key.split('.')
+                table_name = parts[-1] if parts else table_key
+                self.metrics_service.record_target_batch_size(self.target_name, table_name, len(events))
+                
+                # Record written records by operation type
+                if insert_events:
+                    self.metrics_service.record_target_record_written(
+                        self.target_name, table_name, "insert"
+                    )
+                if update_events:
+                    self.metrics_service.record_target_record_written(
+                        self.target_name, table_name, "update"
+                    )
+            
             # Parse table key for better logging
             parts = table_key.split('.')
             if len(parts) >= 3:
@@ -1401,6 +1445,16 @@ class TargetThread:
                 self._stats['init_batch_records_processed'] += len(batch_data)
                 self._stats['init_query_events_processed'] += len(events)
                 self._stats['last_event_time'] = time.time()
+            
+            # Update metrics
+            if self.metrics_service:
+                # Parse table key to get table name
+                parts = table_key.split('.')
+                table_name = parts[-1] if parts else table_key
+                self.metrics_service.record_target_batch_size(self.target_name, table_name, len(batch_data))
+                self.metrics_service.record_target_record_written(
+                    self.target_name, table_name, "init_query"
+                )
             
             # Parse table key for better logging
             parts = table_key.split('.')
@@ -1703,11 +1757,13 @@ class TargetThreadService:
     """Service for managing target threads"""
     
     def __init__(self, message_bus: MessageBus, database_service: DatabaseService,
-                 transform_service: TransformService, filter_service: FilterService):
+                 transform_service: TransformService, filter_service: FilterService,
+                 metrics_service: Optional[MetricsService] = None):
         self.message_bus = message_bus
         self.database_service = database_service
         self.transform_service = transform_service
         self.filter_service = filter_service
+        self.metrics_service = metrics_service
         self.logger = structlog.get_logger()
         
         # Thread management
@@ -1734,7 +1790,8 @@ class TargetThreadService:
                 database_service=self.database_service,
                 transform_service=self.transform_service,
                 filter_service=self.filter_service,
-                config=config
+                config=config,
+                metrics_service=self.metrics_service
             )
             
             self._target_threads[target_name] = target_thread
