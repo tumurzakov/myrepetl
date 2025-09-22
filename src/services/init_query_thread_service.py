@@ -557,7 +557,13 @@ class InitQueryThread:
     def _finalize_run_state(self) -> None:
         """Finalize run state after thread execution"""
         with self._stats_lock:
-            self._stats['is_running'] = False
+            # Only set is_running to False if not already completed
+            # This preserves the completion state set by error handlers
+            if not self._stats.get('is_completed', False):
+                self._stats['is_running'] = False
+            else:
+                # If already completed, just update activity time
+                self._stats['is_running'] = False
             self._stats['last_activity_time'] = time.time()
 
     def _is_shutdown_requested(self) -> bool:

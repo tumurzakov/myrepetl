@@ -528,7 +528,12 @@ class MetricsService:
                     elif stat.get('is_completed', False):
                         status = 'completed'
                     elif stat.get('rows_processed', 0) > 0:
-                        status = 'active'  # Has processed data but not currently running
+                        # Check completion reason to determine if thread can be resumed
+                        completion_reason = stat.get('completion_reason')
+                        if completion_reason in [None, 'queue_overflow', 'execution_error']:
+                            status = 'incomplete'  # Can be resumed
+                        else:
+                            status = 'stopped'  # Stopped for other reasons
                     else:
                         status = 'unknown'
                     
