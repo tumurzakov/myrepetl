@@ -1,0 +1,52 @@
+{
+  "sources": {
+    "source1": {
+      "host": "localhost",
+      "port": 3306,
+      "user": "replication_user",
+      "password": "password",
+      "database": "source_db",
+      "server_id": 1
+    }
+  },
+  "targets": {
+    "target1": {
+      "host": "localhost",
+      "port": 3306,
+      "user": "target_user",
+      "password": "password",
+      "database": "target_db",
+      "batch_size": 50,
+      "batch_flush_interval": 3.0
+    }
+  },
+  "mapping": {
+    "source1.users": {
+      "target": "target1",
+      "target_table": "users",
+      "primary_key": "id",
+      "columns": {
+        "id": "id",
+        "name": "name",
+        "email": "email",
+        "created_at": "created_at"
+      }
+    },
+    "source1.orders": {
+      "target": "target1",
+      "target_table": "orders",
+      "primary_key": "id",
+      "columns": {
+        "id": "id",
+        "user_id": "user_id",
+        "amount": "amount",
+        "status": "status",
+        "created_at": "created_at"
+      }
+    }
+  },
+  "init_queries": {
+    "source1.users": "SELECT id, name, email, created_at FROM users WHERE created_at >= '2024-01-01'",
+    "source1.orders": "SELECT id, user_id, amount, status, created_at FROM orders WHERE created_at >= '2024-01-01'"
+  }
+}

@@ -954,3 +954,308 @@ class TestTargetThreadService:
         assert stats['batch_operations'] == 0
         assert stats['batch_records_processed'] == 0
 
+    def test_init_batch_processing_initialization(self):
+        """Test init batch processing attributes are correctly initialized"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 50
+        target_config.batch_flush_interval = 3.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Check init batch attributes
+        assert hasattr(thread, '_init_batch_accumulator')
+        assert hasattr(thread, '_init_batch_lock')
+        assert hasattr(thread, '_last_init_batch_flush')
+        assert thread._init_batch_accumulator == {}
+        assert isinstance(thread._init_batch_lock, type(threading.Lock()))
+        assert isinstance(thread._last_init_batch_flush, float)
+        
+        # Check init batch statistics
+        stats = thread.get_stats()
+        assert 'init_batch_operations' in stats
+        assert 'init_batch_records_processed' in stats
+        assert stats['init_batch_operations'] == 0
+        assert stats['init_batch_records_processed'] == 0
+
+    def test_get_init_table_key(self):
+        """Test init table key generation"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Create mock init event
+        from src.models.events import InitQueryEvent
+        init_event = InitQueryEvent(
+            mapping_key="source1.table1",
+            source_name="source1",
+            target_name="target1",
+            target_table="target_table1",
+            row_data={"id": 1, "name": "test"},
+            columns=["id", "name"],
+            init_query="SELECT * FROM table1",
+            primary_key="id",
+            column_mapping={"id": "id", "name": "name"}
+        )
+        
+        table_key = thread._get_init_table_key(init_event)
+        assert table_key == "source1.target_table1"
+
+    def test_add_to_init_batch(self):
+        """Test adding init events to batch"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 2  # Small batch size for testing
+        target_config.batch_flush_interval = 5.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Create mock init event
+        from src.models.events import InitQueryEvent
+        init_event = InitQueryEvent(
+            mapping_key="source1.table1",
+            source_name="source1",
+            target_name="target1",
+            target_table="target_table1",
+            row_data={"id": 1, "name": "test"},
+            columns=["id", "name"],
+            init_query="SELECT * FROM table1",
+            primary_key="id",
+            column_mapping={"id": "id", "name": "name"}
+        )
+        
+        # Mock the batch processing method
+        with patch.object(thread, '_process_init_batch_events') as mock_process:
+            # Add first event
+            result = thread._add_to_init_batch(init_event)
+            assert result is True
+            assert len(thread._init_batch_accumulator["source1.target_table1"]) == 1
+            
+            # Add second event (should trigger batch processing)
+            result = thread._add_to_init_batch(init_event)
+            assert result is True
+            assert mock_process.called
+            assert len(thread._init_batch_accumulator["source1.target_table1"]) == 0
+
+    def test_should_flush_init_batches_time_interval(self):
+        """Test init batch flushing based on time interval"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 1.0  # 1 second
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Set last flush time to 2 seconds ago
+        thread._last_init_batch_flush = time.time() - 2.0
+        
+        # Should flush due to time interval
+        assert thread._should_flush_init_batches() is True
+
+    def test_should_not_flush_init_batches_before_time_interval(self):
+        """Test init batch doesn't flush before time interval"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Set last flush time to 1 second ago
+        thread._last_init_batch_flush = time.time() - 1.0
+        
+        # Should not flush before time interval
+        assert thread._should_flush_init_batches() is False
+
+    def test_should_flush_init_batches_size_limit(self):
+        """Test init batch flushing based on size limit"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 2
+        target_config.batch_flush_interval = 5.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Manually populate init batch accumulator to avoid auto-processing
+        from src.models.events import InitQueryEvent
+        init_event = InitQueryEvent(
+            mapping_key="source1.table1",
+            source_name="source1",
+            target_name="target1",
+            target_table="target_table1",
+            row_data={"id": 1, "name": "test"},
+            columns=["id", "name"],
+            init_query="SELECT * FROM table1",
+            primary_key="id",
+            column_mapping={"id": "id", "name": "name"}
+        )
+        
+        thread._init_batch_accumulator["source1.target_table1"] = [init_event, init_event]
+        
+        # Should flush due to size limit
+        assert thread._should_flush_init_batches() is True
+
+    def test_flush_all_init_batches(self):
+        """Test flushing all accumulated init batches"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Mock the batch processing method
+        with patch.object(thread, '_process_init_batch_events') as mock_process:
+            # Add some events to init batch accumulator
+            from src.models.events import InitQueryEvent
+            init_event = InitQueryEvent(
+                mapping_key="source1.table1",
+                source_name="source1",
+                target_name="target1",
+                target_table="target_table1",
+                row_data={"id": 1, "name": "test"},
+                columns=["id", "name"],
+                init_query="SELECT * FROM table1",
+                primary_key="id",
+                column_mapping={"id": "id", "name": "name"}
+            )
+            
+            thread._init_batch_accumulator["source1.target_table1"] = [init_event, init_event]
+            
+            # Flush all batches
+            thread._flush_all_init_batches()
+            
+            # Check that batch processing was called
+            assert mock_process.called
+            assert len(thread._init_batch_accumulator) == 0
+
+    def test_init_batch_statistics(self):
+        """Test init batch statistics are tracked correctly"""
+        target_config = Mock(spec=DatabaseConfig)
+        target_config.batch_size = 100
+        target_config.batch_flush_interval = 5.0
+        
+        message_bus = Mock()
+        database_service = Mock()
+        transform_service = Mock()
+        filter_service = Mock()
+        config = Mock(spec=ETLConfig)
+        
+        thread = TargetThread(
+            target_name="test_target",
+            target_config=target_config,
+            message_bus=message_bus,
+            database_service=database_service,
+            transform_service=transform_service,
+            filter_service=filter_service,
+            config=config
+        )
+        
+        # Check initial statistics
+        stats = thread.get_stats()
+        assert stats['init_batch_operations'] == 0
+        assert stats['init_batch_records_processed'] == 0
+        
+        # Manually update statistics (simulating batch processing)
+        with thread._stats_lock:
+            thread._stats['init_batch_operations'] = 5
+            thread._stats['init_batch_records_processed'] = 100
+        
+        stats = thread.get_stats()
+        assert stats['init_batch_operations'] == 5
+        assert stats['init_batch_records_processed'] == 100
+

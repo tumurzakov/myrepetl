@@ -52,6 +52,11 @@ class TargetThread:
         self._batch_lock = threading.Lock()
         self._last_batch_flush = time.time()
         
+        # Init events batch processing
+        self._init_batch_accumulator = {}  # {table_key: [init_events]}
+        self._init_batch_lock = threading.Lock()
+        self._last_init_batch_flush = time.time()
+        
         # Statistics
         self._stats = {
             'events_processed': 0,
@@ -67,7 +72,9 @@ class TargetThread:
             'max_queue_size': 0,
             'queue_usage_percent': 0,
             'batch_operations': 0,
-            'batch_records_processed': 0
+            'batch_records_processed': 0,
+            'init_batch_operations': 0,
+            'init_batch_records_processed': 0
         }
         self._stats_lock = threading.Lock()
         
@@ -122,6 +129,13 @@ class TargetThread:
             self._flush_all_batches()
         except Exception as e:
             self.logger.warning("Error flushing batches during shutdown", 
+                              target_name=self.target_name, error=str(e))
+        
+        # Flush all remaining init batches before stopping
+        try:
+            self._flush_all_init_batches()
+        except Exception as e:
+            self.logger.warning("Error flushing init batches during shutdown", 
                               target_name=self.target_name, error=str(e))
         
         # Wait for thread to finish
@@ -192,6 +206,20 @@ class TargetThread:
                                             total_events=total_events)
                         self._flush_all_batches()
                     
+                    # Check if we should flush init batches
+                    if self._should_flush_init_batches():
+                        # Count total events in all init batches before flushing
+                        with self._init_batch_lock:
+                            total_events = sum(len(events) for events in self._init_batch_accumulator.values())
+                            total_batches = len(self._init_batch_accumulator)
+                        
+                        if total_events > 0:
+                            self.logger.info("Time interval reached, flushing init batches", 
+                                            target_name=self.target_name,
+                                            total_batches=total_batches,
+                                            total_events=total_events)
+                        self._flush_all_init_batches()
+                    
                     # Log queue statistics every 30 seconds
                     current_time = time.time()
                     if current_time - last_stats_time > 30:
@@ -212,6 +240,20 @@ class TargetThread:
                                             total_batches=total_batches,
                                             total_events=total_events)
                         self._flush_all_batches()
+                    
+                    # Check if we should flush init batches
+                    if self._should_flush_init_batches():
+                        # Count total events in all init batches before flushing
+                        with self._init_batch_lock:
+                            total_events = sum(len(events) for events in self._init_batch_accumulator.values())
+                            total_batches = len(self._init_batch_accumulator)
+                        
+                        if total_events > 0:
+                            self.logger.info("Timeout reached, flushing init batches", 
+                                            target_name=self.target_name,
+                                            total_batches=total_batches,
+                                            total_events=total_events)
+                        self._flush_all_init_batches()
                     continue
                 except Exception as e:
                     import traceback
@@ -546,12 +588,12 @@ class TargetThread:
         return None
     
     def _process_init_query_event(self, event: InitQueryEvent) -> None:
-        """Process init query event"""
+        """Process init query event - now uses batch processing"""
         import uuid
         operation_id = str(uuid.uuid4())[:8]
         
         try:
-            self.logger.info("Processing init query event", 
+            self.logger.debug("Processing init query event", 
                             operation_id=operation_id,
                             event_id=event.event_id,
                             mapping_key=event.mapping_key,
@@ -564,54 +606,32 @@ class TargetThread:
                                   mapping_key=event.mapping_key)
                 return
             
-            # Apply filters if configured
-            if event.filter_config:
-                if not self.filter_service.apply_filter(event.row_data, event.filter_config):
-                    self.logger.debug("Init query row filtered out", 
-                                    mapping_key=event.mapping_key, 
-                                    row=event.row_data)
-                    return
+            # Add to init batch for processing
+            was_batched = self._add_to_init_batch(event)
             
-            # Apply transformations
-            source_table = event.mapping_key  # mapping_key is already in format "source_name.table_name"
-            transformed_data = self.transform_service.apply_column_transforms(
-                event.row_data, event.column_mapping, source_table
-            )
-            
-            # Build and execute UPSERT
-            sql, values = SQLBuilder.build_upsert_sql(
-                event.target_table,
-                transformed_data,
-                event.primary_key
-            )
-            
-            # Execute the UPSERT with retry logic
-            result = self._execute_with_retry(
-                self.database_service.execute_update, sql, values, self.target_name
-            )
-            
-            # Update statistics
-            with self._stats_lock:
-                self._stats['init_query_events_processed'] += 1
-                self._stats['last_event_time'] = time.time()
-            
-            self.logger.debug("Init query event processed successfully", 
-                            operation_id=operation_id,
-                            event_id=event.event_id,
-                            mapping_key=event.mapping_key,
-                            original=event.row_data, 
-                            transformed=transformed_data)
+            if was_batched:
+                self.logger.debug("Init query event added to batch", 
+                                operation_id=operation_id,
+                                event_id=event.event_id,
+                                mapping_key=event.mapping_key,
+                                target_table=event.target_table)
+            else:
+                # This shouldn't happen for init events, but just in case
+                self.logger.warning("Init query event was not batched", 
+                                  operation_id=operation_id,
+                                  event_id=event.event_id,
+                                  mapping_key=event.mapping_key,
+                                  target_table=event.target_table)
             
         except Exception as e:
-            with self._stats_lock:
-                self._stats['errors_count'] += 1
-            
             self.logger.error("Error processing init query event", 
                             operation_id=operation_id,
                             event_id=event.event_id,
                             mapping_key=event.mapping_key,
+                            target_table=event.target_table,
                             error=str(e))
-            raise
+            with self._stats_lock:
+                self._stats['errors_count'] += 1
     
     def _process_insert_event(self, event: InsertEvent, table_mapping, target_table_name: str) -> None:
         """Process INSERT event"""
@@ -996,6 +1016,10 @@ class TargetThread:
         """Get unique key for table to group events for batching"""
         return f"{event.source_name}.{event.schema}.{event.table}"
     
+    def _get_init_table_key(self, event: InitQueryEvent) -> str:
+        """Get unique key for init event table to group events for batching"""
+        return f"{event.source_name}.{event.target_table}"
+    
     def _should_flush_batches(self) -> bool:
         """Check if batches should be flushed based on time or size"""
         current_time = time.time()
@@ -1007,6 +1031,22 @@ class TargetThread:
                 return True
             
             for table_key, events in self._batch_accumulator.items():
+                if len(events) >= self._batch_size:
+                    return True
+        
+        return False
+    
+    def _should_flush_init_batches(self) -> bool:
+        """Check if init batches should be flushed based on time or size"""
+        current_time = time.time()
+        time_elapsed = current_time - self._last_init_batch_flush
+        
+        with self._init_batch_lock:
+            # Flush if time interval exceeded or any batch is full
+            if time_elapsed >= self._batch_flush_interval:
+                return True
+            
+            for table_key, events in self._init_batch_accumulator.items():
                 if len(events) >= self._batch_size:
                     return True
         
@@ -1045,6 +1085,40 @@ class TargetThread:
             # Clear all batches
             self._batch_accumulator.clear()
             self._last_batch_flush = time.time()
+    
+    def _flush_all_init_batches(self) -> None:
+        """Flush all accumulated init batches"""
+        with self._init_batch_lock:
+            if not self._init_batch_accumulator:
+                return
+            
+            total_events = sum(len(events) for events in self._init_batch_accumulator.values())
+            if total_events > 0:
+                self.logger.info("Flushing all accumulated init batches", 
+                                target_name=self.target_name,
+                                total_batches=len(self._init_batch_accumulator),
+                                total_events=total_events)
+            
+            for table_key, events in self._init_batch_accumulator.items():
+                if events:
+                    # Parse table key to get source and table
+                    parts = table_key.split('.')
+                    if len(parts) >= 2:
+                        source_name, table = parts[0], parts[1]
+                        table_info = f"{source_name}.{table}"
+                    else:
+                        table_info = table_key
+                    
+                    self.logger.info("Flushing init batch for table", 
+                                    table_key=table_key,
+                                    table_info=table_info,
+                                    batch_size=len(events),
+                                    target_name=self.target_name)
+                    self._process_init_batch_events(table_key, events)
+            
+            # Clear all init batches
+            self._init_batch_accumulator.clear()
+            self._last_init_batch_flush = time.time()
     
     def _add_to_batch(self, event: BinlogEvent) -> bool:
         """Add event to batch accumulator. Returns True if event was added to batch, False if should be processed immediately"""
@@ -1092,6 +1166,51 @@ class TargetThread:
                 
                 # Process the full batch
                 self._process_batch_events(table_key, events_to_process)
+                return True
+        
+        return True
+    
+    def _add_to_init_batch(self, event: InitQueryEvent) -> bool:
+        """Add init event to batch accumulator. Returns True if event was added to batch, False if should be processed immediately"""
+        table_key = self._get_init_table_key(event)
+        
+        with self._init_batch_lock:
+            if table_key not in self._init_batch_accumulator:
+                self._init_batch_accumulator[table_key] = []
+            
+            self._init_batch_accumulator[table_key].append(event)
+            
+            # Log batch accumulation progress
+            current_batch_size = len(self._init_batch_accumulator[table_key])
+            if current_batch_size % 10 == 0 or current_batch_size == 1:  # Log every 10 events or first event
+                self.logger.debug("Init event added to batch", 
+                                table_key=table_key,
+                                current_batch_size=current_batch_size,
+                                batch_size_limit=self._batch_size,
+                                target_name=self.target_name)
+            
+            # If batch is full, flush it
+            if len(self._init_batch_accumulator[table_key]) >= self._batch_size:
+                events_to_process = self._init_batch_accumulator[table_key].copy()
+                self._init_batch_accumulator[table_key].clear()
+                self._last_init_batch_flush = time.time()
+                
+                # Parse table key for better logging
+                parts = table_key.split('.')
+                if len(parts) >= 2:
+                    source_name, table = parts[0], parts[1]
+                    table_info = f"{source_name}.{table}"
+                else:
+                    table_info = table_key
+                
+                self.logger.info("Init batch size limit reached, processing batch", 
+                                table_key=table_key,
+                                table_info=table_info,
+                                batch_size=len(events_to_process),
+                                target_name=self.target_name)
+                
+                # Process the full batch
+                self._process_init_batch_events(table_key, events_to_process)
                 return True
         
         return True
@@ -1187,6 +1306,124 @@ class TargetThread:
             
         except Exception as e:
             self.logger.error("Error processing batch events", 
+                            operation_id=operation_id,
+                            table_key=table_key,
+                            target_name=self.target_name,
+                            batch_size=len(events),
+                            error=str(e))
+            with self._stats_lock:
+                self._stats['errors_count'] += 1
+    
+    def _process_init_batch_events(self, table_key: str, events: List[InitQueryEvent]) -> None:
+        """Process a batch of init events for the same table"""
+        if not events:
+            return
+        
+        import uuid
+        operation_id = str(uuid.uuid4())[:8]
+        
+        try:
+            # Get table mapping from first event
+            first_event = events[0]
+            target_table_name = first_event.target_table
+            
+            # Check target connection before processing
+            if not self._ensure_target_connection():
+                self.logger.warning("Target connection not available, skipping init batch", 
+                                  target_name=self.target_name,
+                                  table_key=table_key,
+                                  batch_size=len(events))
+                return
+            
+            self.logger.info("Processing init batch events", 
+                            operation_id=operation_id,
+                            table_key=table_key,
+                            target_table=target_table_name,
+                            target_name=self.target_name,
+                            total_events=len(events),
+                            batch_size=self._batch_size)
+            
+            # Collect all transformed data
+            batch_data = []
+            
+            for event in events:
+                # Apply filters if configured
+                if event.filter_config:
+                    if not self.filter_service.apply_filter(event.row_data, event.filter_config):
+                        continue
+                
+                # Apply transformations
+                source_table = event.mapping_key
+                transformed_data = self.transform_service.apply_column_transforms(
+                    event.row_data, event.column_mapping, source_table
+                )
+                batch_data.append(transformed_data)
+            
+            if not batch_data:
+                self.logger.debug("No init events passed filters", 
+                                operation_id=operation_id,
+                                target_name=self.target_name,
+                                total_events=len(events))
+                return
+            
+            # Build and execute batch UPSERT
+            sql, values_list = SQLBuilder.build_batch_upsert_sql(
+                target_table_name,
+                batch_data,
+                first_event.primary_key
+            )
+            
+            # Log detailed batch information
+            primary_keys = [row.get(first_event.primary_key) for row in batch_data]
+            self.logger.info("Executing init batch UPSERT", 
+                            operation_id=operation_id,
+                            target_table=target_table_name,
+                            sql=sql,
+                            batch_size=len(batch_data),
+                            primary_keys=primary_keys[:10],  # Log first 10 primary keys
+                            total_primary_keys=len(primary_keys),
+                            target_name=self.target_name)
+            
+            # Log SQL statement in debug mode for troubleshooting
+            self.logger.debug("Init batch UPSERT SQL statement", 
+                            operation_id=operation_id,
+                            sql=sql,
+                            values_count=len(values_list),
+                            first_row_values=values_list[0] if values_list else None)
+            
+            result = self._execute_with_retry(
+                self.database_service.execute_batch, sql, values_list, self.target_name
+            )
+            
+            # Update statistics
+            with self._stats_lock:
+                self._stats['init_batch_operations'] += 1
+                self._stats['init_batch_records_processed'] += len(batch_data)
+                self._stats['init_query_events_processed'] += len(events)
+                self._stats['last_event_time'] = time.time()
+            
+            # Parse table key for better logging
+            parts = table_key.split('.')
+            if len(parts) >= 2:
+                source_name, table = parts[0], parts[1]
+                table_info = f"{source_name}.{table}"
+            else:
+                table_info = table_key
+            
+            self.logger.info("Init batch events processed successfully", 
+                            operation_id=operation_id,
+                            table_key=table_key,
+                            table_info=table_info,
+                            target_table=target_table_name,
+                            target_name=self.target_name,
+                            total_events=len(events),
+                            batch_size=len(batch_data),
+                            affected_rows=result,
+                            primary_keys=primary_keys[:10],
+                            total_primary_keys=len(primary_keys))
+            
+        except Exception as e:
+            self.logger.error("Error processing init batch events", 
                             operation_id=operation_id,
                             table_key=table_key,
                             target_name=self.target_name,
@@ -1370,6 +1607,8 @@ class TargetThread:
                         init_query_events_processed=stats['init_query_events_processed'],
                         batch_operations=stats['batch_operations'],
                         batch_records_processed=stats['batch_records_processed'],
+                        init_batch_operations=stats['init_batch_operations'],
+                        init_batch_records_processed=stats['init_batch_records_processed'],
                         batch_size=self._batch_size,
                         batch_flush_interval=self._batch_flush_interval)
     
