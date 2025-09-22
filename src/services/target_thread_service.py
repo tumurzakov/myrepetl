@@ -318,6 +318,13 @@ class TargetThread:
                             mapping_key=getattr(event_data, 'mapping_key', None),
                             target_table=getattr(event_data, 'target_table', None))
             
+            # Check target connection before processing
+            if not self._ensure_target_connection():
+                self.logger.warning("Target connection not available, skipping init query event", 
+                                  target_name=self.target_name,
+                                  event_id=getattr(event_data, 'event_id', None))
+                return
+            
             # Process init query event directly (no queue needed for init queries)
             self._process_init_query_event(event_data)
             
