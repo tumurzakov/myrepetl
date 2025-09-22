@@ -258,7 +258,8 @@ class ETLService:
                 
                 # Execute init query on source database
                 source_config = self.config.get_source_config(source_name)
-                source_connection_name = f"init_source_{source_name}"
+                # Create unique connection name for each table to avoid conflicts
+                source_connection_name = f"init_source_{source_name}_{mapping_key.replace('.', '_')}"
                 
                 try:
                     # Connect to source database

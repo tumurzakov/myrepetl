@@ -142,7 +142,7 @@ class TestInitQuery:
         # Verify calls
         mock_db_service.is_table_empty.assert_called_once_with('users', 'target1')
         mock_db_service.execute_init_query.assert_called_once_with(
-            "SELECT * FROM users WHERE status = 'active'", 'init_source_source1'
+            "SELECT * FROM users WHERE status = 'active'", 'init_source_source1_source1_users'
         )
         assert mock_db_service.execute_update.call_count == 2  # Two rows processed
     
@@ -290,7 +290,7 @@ class TestInitQuery:
         # Verify calls
         mock_db_service.is_table_empty.assert_called_once_with('users', 'target1')
         mock_db_service.execute_init_query.assert_called_once_with(
-            "SELECT * FROM users", 'init_source_source1'
+            "SELECT * FROM users", 'init_source_source1_source1_users'
         )
         # Only one row should be processed (active user)
         assert mock_db_service.execute_update.call_count == 1

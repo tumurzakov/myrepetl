@@ -157,7 +157,8 @@ class InitQueryThread:
             
             # Get source configuration
             source_config = self.config.get_source_config(self.source_name)
-            source_connection_name = f"init_source_{self.source_name}"
+            # Create unique connection name for each table to avoid conflicts
+            source_connection_name = f"init_source_{self.source_name}_{self.mapping_key.replace('.', '_')}"
             
             try:
                 # Connect to source database
