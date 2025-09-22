@@ -90,7 +90,7 @@ class ETLService:
             )
             
             # Initialize metrics endpoint
-            metrics_port = getattr(self.config, 'metrics_port', 8080)
+            metrics_port = self.config.metrics_port
             self.metrics_endpoint = MetricsEndpoint(
                 metrics_service=self.metrics_service,
                 port=metrics_port

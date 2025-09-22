@@ -53,7 +53,7 @@ docker-compose ps
 python -m src.cli --config examples/metrics_config_example.json
 ```
 
-Проверьте доступность метрик: http://localhost:8080/metrics
+Проверьте доступность метрик: http://localhost:8000/metrics
 
 ## Файлы конфигурации
 
@@ -187,7 +187,7 @@ slack_configs:
 
 ### Нет данных в панелях
 
-1. Проверьте, что метрики существуют: `http://localhost:8080/metrics`
+1. Проверьте, что метрики существуют: `http://localhost:8000/metrics`
 2. Убедитесь, что Prometheus datasource настроен правильно
 3. Проверьте временной диапазон дашборда
 4. Убедитесь, что MyRepETL активно обрабатывает данные

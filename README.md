@@ -32,8 +32,8 @@ myrepetl --help
 - **Статистика обработки данных** - количество обработанных записей, размеры батчей, записи в целевые таблицы
 - **Мониторинг соединений** - статус соединений с источниками и приемниками, количество переподключений
 - **Метрики репликации** - активность соединений репликации, распределение событий (insert/update/delete)
-- **HTTP endpoint** - метрики доступны по адресу `http://localhost:8080/metrics`
-- **Health check** - endpoint для проверки состояния системы `http://localhost:8080/health`
+- **HTTP endpoint** - метрики доступны по адресу `http://localhost:8000/metrics`
+- **Health check** - endpoint для проверки состояния системы `http://localhost:8000/health`
 - **Документация метрик** - подробное описание всех метрик в [METRICS.md](METRICS.md)
 
 ### Улучшенная обработка соединений с MySQL (22.09.2025)
@@ -240,8 +240,8 @@ MyRepETL предоставляет полную интеграцию с Prometh
 
 После запуска ETL сервиса метрики доступны по следующим адресам:
 
-- **Метрики Prometheus**: `http://localhost:8080/metrics`
-- **Health check**: `http://localhost:8080/health` (детальная информация о состоянии системы)
+- **Метрики Prometheus**: `http://localhost:8000/metrics`
+- **Health check**: `http://localhost:8000/health` (детальная информация о состоянии системы)
 
 ### Основные метрики
 
@@ -280,7 +280,7 @@ MyRepETL предоставляет полную интеграцию с Prometh
 
 ```json
 {
-  "metrics_port": 8080,
+  "metrics_port": 8000,
   "sources": { ... },
   "targets": { ... }
 }
@@ -291,7 +291,7 @@ MyRepETL предоставляет полную интеграцию с Prometh
 Система предоставляет comprehensive health check endpoint, который возвращает детальную информацию о состоянии всех компонентов:
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8000/health
 ```
 
 Health endpoint возвращает JSON с информацией о:

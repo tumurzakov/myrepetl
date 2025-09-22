@@ -11,7 +11,7 @@ scrape_configs:
   # MyRepETL metrics
   - job_name: 'myrepetl'
     static_configs:
-      - targets: ['localhost:8080']
+      - targets: ['localhost:8000']
     metrics_path: '/metrics'
     scrape_interval: 10s
     scrape_timeout: 5s
@@ -19,7 +19,7 @@ scrape_configs:
   # MyRepETL health check
   - job_name: 'myrepetl-health'
     static_configs:
-      - targets: ['localhost:8080']
+      - targets: ['localhost:8000']
     metrics_path: '/health'
     scrape_interval: 30s
     scrape_timeout: 10s

@@ -114,6 +114,7 @@ class ETLConfig:
     replication: ReplicationConfig
     mapping: Dict[str, TableMapping]
     monitoring: Optional[Dict[str, Any]] = None
+    metrics_port: int = 8000
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -175,7 +176,8 @@ class ETLConfig:
                 targets=targets,
                 replication=replication_config,
                 mapping=mapping,
-                monitoring=config_dict.get('monitoring')
+                monitoring=config_dict.get('monitoring'),
+                metrics_port=config_dict.get('metrics_port', 8000)
             )
         except KeyError as e:
             raise ConfigurationError(f"Missing required configuration key: {e}")

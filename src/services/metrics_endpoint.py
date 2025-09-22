@@ -99,7 +99,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 class MetricsEndpoint:
     """HTTP endpoint for Prometheus metrics"""
     
-    def __init__(self, metrics_service: MetricsService, host: str = '0.0.0.0', port: int = 8080):
+    def __init__(self, metrics_service: MetricsService, host: str = '0.0.0.0', port: int = 8000):
         self.metrics_service = metrics_service
         self.host = host
         self.port = port

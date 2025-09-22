@@ -43,7 +43,7 @@
       }
     }
   },
-  "metrics_port": 8080,
+  "metrics_port": 8000,
   "batch_size": 1000,
   "batch_timeout": 5,
   "init_batch_size": 5000,
