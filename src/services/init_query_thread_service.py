@@ -360,9 +360,9 @@ class InitQueryThread:
                 page_processed += 1
                 self._update_row_processed_stats()
             else:
-                # Queue overflow - stop processing to prevent data loss
-                self._handle_queue_overflow(target_name, offset + page_processed, total_count)
-                break
+                # Queue overflow - wait and retry instead of stopping
+                self._handle_queue_overflow_retry(target_name, offset + page_processed, total_count)
+                # Don't break! Keep trying the same row until success
         
         return page_processed
     
@@ -469,8 +469,66 @@ class InitQueryThread:
                            progress_percent=f"{progress_percent:.1f}%",
                            pages_processed=self._stats['pages_processed'])
     
+    def _handle_queue_overflow_retry(self, target_name: str, current_offset: int, total_count: int) -> None:
+        """Handle queue overflow condition with retry logic"""
+        import time
+        
+        with self._stats_lock:
+            self._stats['errors_count'] += 1
+            self._stats['queue_overflow_stops'] += 1
+            self._stats['current_offset'] = current_offset
+        
+        # Update metrics
+        if self.metrics_service:
+            self.metrics_service.record_error(
+                "queue_overflow", "init_query_thread", 
+                self.source_name, target_name
+            )
+        
+        # Wait for queue to clear instead of stopping
+        queue_size = self.message_bus.get_queue_size()
+        queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
+        
+        self.logger.warning("Queue overflow detected, waiting for queue to clear", 
+                           mapping_key=self.mapping_key,
+                           source_name=self.source_name,
+                           target_name=target_name,
+                           processed_rows=current_offset,
+                           current_offset=current_offset,
+                           total_estimated=total_count,
+                           queue_size=queue_size,
+                           queue_usage_percent=queue_usage_percent)
+        
+        # Wait with exponential backoff
+        base_delay = 1.0  # Start with 1 second
+        max_delay = 30.0  # Maximum 30 seconds
+        delay = base_delay
+        
+        while not self._is_shutdown_requested():
+            time.sleep(delay)
+            
+            # Check queue status after waiting
+            queue_size = self.message_bus.get_queue_size()
+            queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
+            
+            # If queue cleared enough, we can try again
+            if queue_usage_percent < 80:  # Resume when queue is below 80%
+                self.logger.info("Queue cleared sufficiently, resuming processing", 
+                               mapping_key=self.mapping_key,
+                               queue_usage_percent=queue_usage_percent,
+                               delay=delay)
+                break
+            
+            # Increase delay with exponential backoff (but cap at max_delay)
+            delay = min(delay * 1.5, max_delay)
+            
+            self.logger.debug("Queue still full, continuing to wait", 
+                            mapping_key=self.mapping_key,
+                            queue_usage_percent=queue_usage_percent,
+                            next_delay=delay)
+
     def _handle_queue_overflow(self, target_name: str, current_offset: int, total_count: int) -> None:
-        """Handle queue overflow condition"""
+        """Handle queue overflow condition (legacy method for compatibility)"""
         with self._stats_lock:
             self._stats['errors_count'] += 1
             self._stats['queue_overflow_stops'] += 1
@@ -593,7 +651,7 @@ class InitQueryThread:
             return self._shutdown_requested
     
     def _publish_with_retry(self, init_query_event: InitQueryEvent, target_name: str, 
-                           max_retries: int = 2, base_delay: float = 0.1) -> bool:
+                           max_retries: int = 10, base_delay: float = 0.5) -> bool:
         """Publish init query event with limited retry logic for queue overflow detection"""
         for attempt in range(max_retries + 1):
             if self._is_shutdown_requested():
@@ -615,21 +673,9 @@ class InitQueryThread:
                                    max_retries=max_retries + 1)
                 return True
             
-            # Check queue usage to determine if we should stop immediately
+            # Check queue usage for logging but don't give up easily
             queue_size = self.message_bus.get_queue_size()
             queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
-            
-            # If queue is more than 95% full, stop immediately to prevent data loss
-            # Increased threshold to be more aggressive about continuing
-            if queue_usage_percent > 95:
-                self.logger.error(f"Message bus queue critically full ({queue_usage_percent:.1f}%), stopping init query to prevent data loss", 
-                                mapping_key=self.mapping_key,
-                                queue_usage_percent=queue_usage_percent,
-                                queue_size=queue_size,
-                                max_queue_size=self.message_bus.max_queue_size,
-                                attempt=attempt + 1,
-                                max_retries=max_retries + 1)
-                return False
             
             # If not the last attempt and queue is not critically full, wait before retrying
             if attempt < max_retries:
