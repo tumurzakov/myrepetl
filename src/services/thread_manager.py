@@ -698,8 +698,9 @@ class ThreadManager:
                 # Source threads are already running, no need to start them
                 return
             
-            # Check if all init query threads are completed
-            all_completed = self.init_query_thread_service.are_all_completed()
+            # Check if all init query threads are completed by waiting with short timeout
+            # This is more reliable than checking status flags
+            all_completed = self.init_query_thread_service.wait_for_all_threads(timeout=0.1)
             
             self.logger.debug("Checking replication start condition",
                             pause_replication_during_init=config.replication.pause_replication_during_init,
@@ -707,7 +708,7 @@ class ThreadManager:
                             all_init_completed=all_completed)
             
             if not all_completed:
-                # Some init queries are still running or can be resumed, wait
+                # Some init queries are still running, wait
                 return
             
             # All init queries are completed, start source threads
@@ -721,6 +722,18 @@ class ThreadManager:
         
         except Exception as e:
             self.logger.error("Error checking replication start after init", error=str(e))
+    
+    def wait_for_init_completion(self, timeout: Optional[float] = None) -> bool:
+        """Wait for all init query threads to complete
+        
+        Args:
+            timeout: Maximum time to wait in seconds. If None, wait indefinitely.
+            
+        Returns:
+            True if all init threads completed, False if timeout occurred
+        """
+        self.logger.info("Waiting for all init query threads to complete", timeout=timeout)
+        return self.init_query_thread_service.wait_for_all_threads(timeout=timeout)
     
     def _is_shutdown_requested(self) -> bool:
         """Check if shutdown is requested"""

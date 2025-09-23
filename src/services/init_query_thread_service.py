@@ -121,6 +121,10 @@ class InitQueryThread:
         with self._stats_lock:
             return self._stats.copy()
     
+    def get_thread(self) -> Optional[threading.Thread]:
+        """Get the underlying thread object"""
+        return self._thread
+    
     def _run(self) -> None:
         """Main thread execution loop"""
         try:
@@ -860,6 +864,66 @@ class InitQueryThreadService:
         """Get count of completed init query threads"""
         with self._threads_lock:
             return len([t for t in self._threads.values() if t.is_completed()])
+    
+    def wait_for_all_threads(self, timeout: Optional[float] = None) -> bool:
+        """Wait for all init query threads to complete
+        
+        Args:
+            timeout: Maximum time to wait in seconds. If None, wait indefinitely.
+            
+        Returns:
+            True if all threads completed, False if timeout occurred
+        """
+        self.logger.info("Waiting for all init query threads to complete", 
+                        timeout=timeout, 
+                        total_threads=len(self._threads))
+        
+        # Get all thread objects while holding the lock
+        with self._threads_lock:
+            thread_objects = []
+            for mapping_key, init_thread in self._threads.items():
+                thread_obj = init_thread.get_thread()
+                if thread_obj and thread_obj.is_alive():
+                    thread_objects.append((mapping_key, thread_obj))
+        
+        if not thread_objects:
+            self.logger.info("No active init query threads to wait for")
+            return True
+        
+        self.logger.info("Waiting for active init query threads", 
+                        active_threads=[mk for mk, _ in thread_objects])
+        
+        # Wait for each thread to complete
+        import time
+        start_time = time.time()
+        
+        for mapping_key, thread_obj in thread_objects:
+            remaining_timeout = None
+            if timeout is not None:
+                elapsed = time.time() - start_time
+                remaining_timeout = max(0, timeout - elapsed)
+                if remaining_timeout <= 0:
+                    self.logger.warning("Timeout waiting for init query threads", 
+                                      timeout=timeout, 
+                                      remaining_threads=[mk for mk, t in thread_objects if t.is_alive()])
+                    return False
+            
+            self.logger.debug("Waiting for init query thread", 
+                            mapping_key=mapping_key, 
+                            remaining_timeout=remaining_timeout)
+            
+            thread_obj.join(timeout=remaining_timeout)
+            
+            if thread_obj.is_alive():
+                self.logger.warning("Init query thread did not complete within timeout", 
+                                  mapping_key=mapping_key, 
+                                  timeout=remaining_timeout)
+                return False
+            else:
+                self.logger.info("Init query thread completed", mapping_key=mapping_key)
+        
+        self.logger.info("All init query threads completed successfully")
+        return True
     
     def get_incomplete_threads(self) -> List[str]:
         """Get list of mapping keys for incomplete init query threads"""
