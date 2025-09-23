@@ -499,32 +499,21 @@ class ThreadManager:
                             incomplete_threads=incomplete_threads)
             
             if incomplete_threads:
-                self.logger.info("Found incomplete init query threads, attempting to resume", 
+                # NOTE: With the new approach, init threads manage their own retry logic
+                # and don't need external resumption. They handle queue overflow internally
+                # by waiting and retrying, so we just log their status for monitoring.
+                self.logger.info("Init query threads in incomplete state (for monitoring only)", 
                                incomplete_count=len(incomplete_threads),
                                incomplete_threads=incomplete_threads)
                 
-                # Check message bus queue size before resuming
+                # Check message bus queue size for monitoring purposes
                 queue_size = self.message_bus.get_queue_size()
                 queue_usage_percent = (queue_size / self.message_bus.max_queue_size) * 100
                 
-                # Resume threads if queue is not critically full
-                # Use a higher threshold (80%) to be more aggressive about resuming threads
-                if queue_usage_percent < 80:  # Resume if queue is less than 80% full
-                    for mapping_key in incomplete_threads:
-                        try:
-                            success = self.init_query_thread_service.resume_init_query_thread(mapping_key, config)
-                            if success:
-                                self.logger.info("Successfully resumed init query thread", mapping_key=mapping_key)
-                            else:
-                                self.logger.warning("Failed to resume init query thread", mapping_key=mapping_key)
-                        except Exception as e:
-                            self.logger.error("Error resuming init query thread", 
-                                            mapping_key=mapping_key, error=str(e))
-                else:
-                    self.logger.warning("Message bus queue too full to resume init query threads", 
-                                      queue_usage_percent=queue_usage_percent,
-                                      queue_size=queue_size,
-                                      max_queue_size=self.message_bus.max_queue_size)
+                self.logger.debug("Queue status during incomplete thread monitoring", 
+                                queue_usage_percent=queue_usage_percent,
+                                queue_size=queue_size,
+                                max_queue_size=self.message_bus.max_queue_size)
         
         except Exception as e:
             self.logger.error("Error checking init query thread health", error=str(e))
